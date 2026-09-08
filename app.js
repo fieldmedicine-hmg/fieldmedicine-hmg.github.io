@@ -2,7 +2,7 @@
   'use strict';
 
   var BACKEND = 'https://script.google.com/macros/s/AKfycbxcVYWRoQRe429lHHZsReYvJ3qVmD-EAK2WdWtY51iXxX0YOuW1-FqlAfd-1-AjdSpD/exec';
-  var WRITE_BRIDGE = 'https://hmg-write-bridge-poc.rustic-variety.workers.dev/';
+  var WRITE_BRIDGE = 'https://hmg-write-bridge-poc.diamond-papaya.workers.dev/';
 
   // Token lives only in a local variable from this point on - never
   // re-read from location.search again, and stripped from the visible
