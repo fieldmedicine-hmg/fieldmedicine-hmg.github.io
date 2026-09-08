@@ -2,7 +2,9 @@
   'use strict';
 
   var BACKEND = 'https://script.google.com/macros/s/AKfycbxcVYWRoQRe429lHHZsReYvJ3qVmD-EAK2WdWtY51iXxX0YOuW1-FqlAfd-1-AjdSpD/exec';
-  var WRITE_BRIDGE = 'https://hmg-write-bridge-poc.diamond-papaya.workers.dev/';
+  var WRITE_BRIDGE_ORIGIN = 'https://hmg-write-bridge-poc.diamond-papaya.workers.dev';
+  var WRITE_BRIDGE = WRITE_BRIDGE_ORIGIN + '/';
+  var BUILD = 'frontend-diag-1';
 
   // Token lives only in a local variable from this point on - never
   // re-read from location.search again, and stripped from the visible
@@ -173,6 +175,17 @@
     }).then(function (resp) { return resp.json(); });
   }
 
+  /** TEST-only: a resolved HTTP response (any status) always carries valid
+   * JSON from this Worker, so reaching this catch means fetch() itself
+   * rejected before any response existed - a network-layer failure that
+   * browsers (Safari especially) report only as an opaque "Load failed" /
+   * "Failed to fetch", indistinguishable from a CORS block, a DNS
+   * failure, or a CSP/connectivity block. This code + the /diag link is
+   * the diagnostic surfaced to the user instead of just that opaque text. */
+  function writeFailureMessage(e) {
+    return 'WRITE-FETCH-FAILED: ' + e.message + '\n\nTo help diagnose: open this link directly in Safari (not through this page) and tell us what you see:\n' + WRITE_BRIDGE_ORIGIN + '/diag';
+  }
+
   function decide(action, code, reason, tagEl, actionsEl) {
     var buttons = actionsEl.querySelectorAll('button');
     buttons.forEach(function (b) { b.disabled = true; });
@@ -189,7 +202,7 @@
         buttons.forEach(function (b) { b.disabled = false; });
       }
     }).catch(function (e) {
-      window.alert('Network error: ' + e.message);
+      window.alert(writeFailureMessage(e));
       buttons.forEach(function (b) { b.disabled = false; });
     });
   }
@@ -206,7 +219,7 @@
         btn.textContent = 'Bulk Approve Remaining';
       }
     }).catch(function (e) {
-      window.alert('Network error: ' + e.message);
+      window.alert(writeFailureMessage(e));
       btn.disabled = false;
       btn.textContent = 'Bulk Approve Remaining';
     });
@@ -225,11 +238,25 @@
         btn.textContent = 'Final Submit';
       }
     }).catch(function (e) {
-      window.alert('Network error: ' + e.message);
+      window.alert(writeFailureMessage(e));
       btn.disabled = false;
       btn.textContent = 'Final Submit';
     });
   }
+
+  // TEST-only visible build marker + a plain link (not fetch, not
+  // affected by CORS at all - a normal top-level Safari navigation) to
+  // the Worker's own /diag endpoint, so reachability of the write-bridge
+  // domain can be checked independently of any CORS/fetch failure mode.
+  (function renderDiagFooter() {
+    var footer = el('div', 'diag-footer');
+    footer.appendChild(document.createTextNode('TEST build: ' + BUILD + ' · '));
+    var link = document.createElement('a');
+    link.href = WRITE_BRIDGE_ORIGIN + '/diag';
+    link.textContent = 'check write-bridge reachability';
+    footer.appendChild(link);
+    document.querySelector('.wrap').appendChild(footer);
+  })();
 
   if (!TOKEN) {
     document.getElementById('status').textContent = 'No token in URL.';

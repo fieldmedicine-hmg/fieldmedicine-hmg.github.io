@@ -22,3 +22,5 @@ button:disabled { opacity: 0.5; cursor: default; }
 .bulk-bar { margin-top: 16px; padding-top: 12px; border-top: 1px solid #d0d0d0; }
 .done-banner { background: #d9ead3; color: #274e13; border: 1px solid #93c47d; border-radius: 4px; padding: 8px 10px; font-size: 13px; font-weight: bold; margin: 10px 0; }
 #status { font-size: 13px; color: #6b6e76; }
+.diag-footer { margin-top: 24px; padding-top: 10px; border-top: 1px solid #eee; font-size: 11px; color: #999; }
+.diag-footer a { color: #6b6e76; }
