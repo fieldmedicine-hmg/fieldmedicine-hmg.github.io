@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HMG Attendance Review (POC)</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: Arial, Helvetica, sans-serif; margin: 0; background: #fff; color: #1a1a1a; }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 16px; }
+  .brand { font-size: 18px; font-weight: bold; }
+  .note { background: #fff6e5; border: 1px solid #f0d38a; border-radius: 4px; padding: 8px 10px; font-size: 12px; color: #6b4d00; margin: 10px 0; }
+  .meta { color: #6b6e76; font-size: 13px; margin-top: 6px; }
+  .emp-card { border: 1px solid #d0d0d0; border-radius: 4px; padding: 12px; margin-bottom: 10px; }
+  .emp-top { display: flex; justify-content: space-between; }
+  .emp-name { font-weight: bold; }
+  .tag { font-size: 11px; font-weight: bold; padding: 2px 8px; border-radius: 3px; }
+  .tag-PENDING { background: #efefef; color: #6b6e76; }
+  .tag-APPROVED { background: #d9ead3; color: #274e13; }
+  button { padding: 8px 14px; border-radius: 4px; border: 1px solid #1a1a1a; background: #fff; font-weight: bold; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  #status { font-size: 13px; color: #6b6e76; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">HMG ATTENDANCE REVIEW — POC (fieldmedicine-hmg)</div>
+  <div class="note">Isolation-architecture proof of concept: this page is hosted on GitHub Pages (not script.google.com) and talks to an isolated Apps Script backend via JSONP. TEST DATA ONLY — not production.</div>
+  <div id="status">Loading…</div>
+  <div id="app"></div>
+</div>
+
+<script>
+var BACKEND = 'https://script.google.com/macros/s/AKfycbxcVYWRoQRe429lHHZsReYvJ3qVmD-EAK2WdWtY51iXxX0YOuW1-FqlAfd-1-AjdSpD/exec';
+var params = new URLSearchParams(location.search);
+var TOKEN = params.get('token') || '';
+
+function jsonp(action, extra) {
+  return new Promise(function (resolve, reject) {
+    var cbName = 'cb_' + Math.random().toString(36).slice(2);
+    window[cbName] = function (data) {
+      delete window[cbName];
+      script.remove();
+      resolve(data);
+    };
+    var qs = 'callback=' + cbName + '&token=' + encodeURIComponent(TOKEN) + '&action=' + action + (extra || '');
+    var script = document.createElement('script');
+    script.src = BACKEND + '?' + qs;
+    script.onerror = function () { reject(new Error('Network error loading backend script')); };
+    document.body.appendChild(script);
+  });
+}
+
+function render(data) {
+  document.getElementById('status').textContent = '';
+  var html = '<div class="meta">Reviewer: <b>' + data.reviewer + '</b> · Zone: <b>' + data.zone + '</b> · Date: <b>' + data.reviewDate + '</b></div>';
+  data.rows.forEach(function (r, i) {
+    html += '<div class="emp-card" id="row-' + i + '">' +
+      '<div class="emp-top"><span class="emp-name">' + r.employeeName + '</span>' +
+      '<span class="tag tag-' + r.decision + '" id="tag-' + i + '">' + r.decision + '</span></div>' +
+      '<div class="meta">' + r.designation + ' · ' + r.event + ' · Check-in ' + r.checkin + ' · Check-out ' + r.checkout + ' · ' + r.status + '</div>' +
+      (r.decision === 'PENDING' ? '<button onclick="approve(' + i + ',\'' + r.employeeCode + '\')" id="btn-' + i + '">Approve</button>' : '') +
+      '</div>';
+  });
+  document.getElementById('app').innerHTML = html;
+}
+
+function approve(i, code) {
+  var btn = document.getElementById('btn-' + i);
+  btn.disabled = true;
+  btn.textContent = 'Approving…';
+  jsonp('approve', '&employeeCode=' + encodeURIComponent(code)).then(function (res) {
+    if (res.ok) {
+      document.getElementById('tag-' + i).textContent = 'APPROVED';
+      document.getElementById('tag-' + i).className = 'tag tag-APPROVED';
+      btn.remove();
+    } else {
+      alert('Error: ' + res.error);
+      btn.disabled = false;
+      btn.textContent = 'Approve';
+    }
+  }).catch(function (e) { alert('Network error: ' + e.message); btn.disabled = false; btn.textContent = 'Approve'; });
+}
+
+if (!TOKEN) {
+  document.getElementById('status').textContent = 'No token in URL.';
+} else {
+  jsonp('getData').then(function (data) {
+    if (!data.ok) { document.getElementById('status').textContent = 'Error: ' + data.error; return; }
+    render(data);
+  }).catch(function (e) {
+    document.getElementById('status').textContent = 'Network error: ' + e.message;
+  });
+}
+</script>
+</body>
+</html>
