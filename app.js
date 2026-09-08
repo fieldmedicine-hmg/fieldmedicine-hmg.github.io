@@ -2,6 +2,7 @@
   'use strict';
 
   var BACKEND = 'https://script.google.com/macros/s/AKfycbxcVYWRoQRe429lHHZsReYvJ3qVmD-EAK2WdWtY51iXxX0YOuW1-FqlAfd-1-AjdSpD/exec';
+  var WRITE_BRIDGE = 'https://hmg-write-bridge-poc.rustic-variety.workers.dev/';
 
   // Token lives only in a local variable from this point on - never
   // re-read from location.search again, and stripped from the visible
@@ -120,10 +121,23 @@
     });
   }
 
+  /** Writes go through the POST-capable Worker bridge, never JSONP/GET -
+   * see the security review this POC came out of. A real fetch() POST,
+   * same-origin-checked by the Worker (Access-Control-Allow-Origin
+   * locked to this exact page's origin), never a client-supplied target
+   * URL, never a generic proxy. */
+  function bridgeWrite(action, extraParams) {
+    return fetch(WRITE_BRIDGE, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(Object.assign({ action: action, token: TOKEN }, extraParams || {})),
+    }).then(function (resp) { return resp.json(); });
+  }
+
   function approve(i, code, btn, tagEl) {
     btn.disabled = true;
     btn.textContent = 'Approving…';
-    jsonp('approve', { employeeCode: code }).then(function (res) {
+    bridgeWrite('approve', { employeeCode: code }).then(function (res) {
       if (res.ok) {
         tagEl.textContent = 'APPROVED';
         tagEl.className = 'tag tag-APPROVED';
