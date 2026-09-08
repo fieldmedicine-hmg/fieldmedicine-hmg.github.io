@@ -96,6 +96,11 @@
     meta.appendChild(el('b', null, data.reviewDate));
     app.appendChild(meta);
 
+    if (data.completed) {
+      var doneBanner = el('div', 'done-banner', 'This review has been submitted. Read-only.');
+      app.appendChild(doneBanner);
+    }
+
     (data.rows || []).forEach(function (r, i) {
       var card = el('div', 'emp-card');
       card.id = 'row-' + i;
@@ -111,14 +116,48 @@
       var metaLine = el('div', 'meta', [r.designation, r.event, 'Check-in ' + r.checkin, 'Check-out ' + r.checkout, r.status].join(' · '));
       card.appendChild(metaLine);
 
-      if (r.decision === 'PENDING') {
-        var btn = el('button', null, 'Approve');
-        btn.id = 'btn-' + i;
-        btn.addEventListener('click', function () { approve(i, r.employeeCode, btn, tag); });
-        card.appendChild(btn);
+      if (r.decision === 'PENDING' && !data.completed) {
+        var actions = el('div', 'row-actions');
+
+        var approveBtn = el('button', null, 'Approve');
+        approveBtn.addEventListener('click', function () { decide('approve', r.employeeCode, null, tag, actions); });
+        actions.appendChild(approveBtn);
+
+        var modifyBtn = el('button', 'btn-secondary', 'Modify');
+        modifyBtn.addEventListener('click', function () {
+          var reason = window.prompt('Reason for modifying this employee\'s status:');
+          if (reason === null) return;
+          if (!reason.trim()) { window.alert('A reason is required.'); return; }
+          decide('modify', r.employeeCode, reason, tag, actions);
+        });
+        actions.appendChild(modifyBtn);
+
+        var rejectBtn = el('button', 'btn-secondary', 'Reject');
+        rejectBtn.addEventListener('click', function () {
+          var reason = window.prompt('Reason for rejecting this employee\'s status:');
+          if (reason === null) return;
+          if (!reason.trim()) { window.alert('A reason is required.'); return; }
+          decide('reject', r.employeeCode, reason, tag, actions);
+        });
+        actions.appendChild(rejectBtn);
+
+        card.appendChild(actions);
       }
       app.appendChild(card);
     });
+
+    if (!data.completed && (data.rows || []).length > 0) {
+      var bulkBar = el('div', 'bulk-bar');
+      var bulkBtn = el('button', 'btn-secondary', 'Bulk Approve Remaining');
+      bulkBtn.addEventListener('click', function () { bulkApprove(bulkBtn); });
+      bulkBar.appendChild(bulkBtn);
+
+      var submitBtn = el('button', 'btn-primary', 'Final Submit');
+      submitBtn.addEventListener('click', function () { finalSubmit(submitBtn); });
+      bulkBar.appendChild(submitBtn);
+
+      app.appendChild(bulkBar);
+    }
   }
 
   /** Writes go through the POST-capable Worker bridge, never JSONP/GET -
@@ -134,23 +173,61 @@
     }).then(function (resp) { return resp.json(); });
   }
 
-  function approve(i, code, btn, tagEl) {
-    btn.disabled = true;
-    btn.textContent = 'Approving…';
-    bridgeWrite('approve', { employeeCode: code }).then(function (res) {
+  function decide(action, code, reason, tagEl, actionsEl) {
+    var buttons = actionsEl.querySelectorAll('button');
+    buttons.forEach(function (b) { b.disabled = true; });
+    var extra = { employeeCode: code };
+    if (reason) extra.reason = reason;
+    bridgeWrite(action, extra).then(function (res) {
       if (res.ok) {
-        tagEl.textContent = 'APPROVED';
-        tagEl.className = 'tag tag-APPROVED';
-        btn.parentNode.removeChild(btn);
+        var label = action === 'approve' ? 'APPROVED' : action === 'modify' ? 'MODIFIED' : 'REJECTED';
+        tagEl.textContent = label;
+        tagEl.className = 'tag tag-' + label;
+        actionsEl.parentNode.removeChild(actionsEl);
+      } else {
+        window.alert('Error: ' + res.error);
+        buttons.forEach(function (b) { b.disabled = false; });
+      }
+    }).catch(function (e) {
+      window.alert('Network error: ' + e.message);
+      buttons.forEach(function (b) { b.disabled = false; });
+    });
+  }
+
+  function bulkApprove(btn) {
+    btn.disabled = true;
+    btn.textContent = 'Approving remaining…';
+    bridgeWrite('bulkApproveRemaining', {}).then(function (res) {
+      if (res.ok) {
+        jsonp('getData', {}).then(renderData);
       } else {
         window.alert('Error: ' + res.error);
         btn.disabled = false;
-        btn.textContent = 'Approve';
+        btn.textContent = 'Bulk Approve Remaining';
       }
     }).catch(function (e) {
       window.alert('Network error: ' + e.message);
       btn.disabled = false;
-      btn.textContent = 'Approve';
+      btn.textContent = 'Bulk Approve Remaining';
+    });
+  }
+
+  function finalSubmit(btn) {
+    if (!window.confirm('Submit this review as final? This cannot be changed afterward.')) return;
+    btn.disabled = true;
+    btn.textContent = 'Submitting…';
+    bridgeWrite('submitFinalReview', {}).then(function (res) {
+      if (res.ok) {
+        jsonp('getData', {}).then(renderData);
+      } else {
+        window.alert('Error: ' + res.error);
+        btn.disabled = false;
+        btn.textContent = 'Final Submit';
+      }
+    }).catch(function (e) {
+      window.alert('Network error: ' + e.message);
+      btn.disabled = false;
+      btn.textContent = 'Final Submit';
     });
   }
 
