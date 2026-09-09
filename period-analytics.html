@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://script.google.com https://script.googleusercontent.com; style-src 'self'; connect-src https://hmg-write-bridge-poc.fieldmedicine1.workers.dev; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';">
+<title>HMG Period Analytics (POC)</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap analytics-wrap">
+  <div class="brand">PERIOD ANALYTICS</div>
+  <div class="note">Isolated TEST-only launcher - never touches the real HMG production Control Center. Read-only reporting over existing authoritative data; no WhatsApp is ever sent from this page.</div>
+  <div class="analytics-nav"><a href="control.html">&larr; Back to Control Center</a></div>
+
+  <div class="filter-bar" id="filterBar">
+    <div class="filter-field">
+      <label for="fromDate">From Date</label>
+      <input type="date" id="fromDate">
+    </div>
+    <div class="filter-field">
+      <label for="toDate">To Date</label>
+      <input type="date" id="toDate">
+    </div>
+    <div class="filter-field">
+      <label for="zoneFilter">Zone</label>
+      <select id="zoneFilter"><option value="">All Zones</option></select>
+    </div>
+    <div class="filter-field">
+      <label for="cityFilter">City</label>
+      <select id="cityFilter"><option value="">All Cities</option></select>
+    </div>
+    <div class="filter-field">
+      <label for="designationFilter">Designation</label>
+      <select id="designationFilter"><option value="">All</option><option value="Paramedic">Paramedic</option><option value="Nurse">Nurse</option><option value="Doctors">Doctors</option></select>
+    </div>
+    <div class="filter-field">
+      <label for="reviewTypeFilter">Review Type</label>
+      <select id="reviewTypeFilter"><option value="">All</option><option value="ZONE">Zone</option><option value="DOCTORS">Doctors</option></select>
+    </div>
+    <div class="filter-field">
+      <label for="attendanceStatusFilter">Attendance Status</label>
+      <select id="attendanceStatusFilter"><option value="">All</option><option value="Complete">Complete</option><option value="Missing Check-in">Missing Check-in</option><option value="Missing Check-out">Missing Check-out</option></select>
+    </div>
+    <div class="filter-field">
+      <label for="decisionFilter">Decision</label>
+      <select id="decisionFilter"><option value="">All</option><option value="APPROVED">Approved</option><option value="MODIFIED">Modified</option><option value="REJECTED">Rejected</option></select>
+    </div>
+    <div class="filter-field">
+      <label for="reviewerFilter">Reviewer</label>
+      <input type="text" id="reviewerFilter" placeholder="exact name">
+    </div>
+    <div class="filter-field checkbox">
+      <input type="checkbox" id="includeTest">
+      <label for="includeTest">Include TEST Data</label>
+    </div>
+    <div class="filter-field">
+      <button id="loadBtn" class="btn-primary">Load</button>
+    </div>
+  </div>
+
+  <div id="statusMsg" class="meta"></div>
+  <div id="resultsHost" hidden>
+
+    <div class="analytics-section">
+      <div class="section-title">Overall Attendance Summary</div>
+      <div class="meta" id="attUnitNote"></div>
+      <div class="stat-grid" id="attStats"></div>
+    </div>
+
+    <div class="analytics-section">
+      <div class="section-title">Manager Review Performance</div>
+      <div class="stat-grid" id="mgrStats"></div>
+      <div class="rank-cards" id="rankCards"></div>
+      <div class="table-scroll">
+        <table class="data-table" id="mgrTable">
+          <thead><tr>
+            <th>Reviewer</th><th>Type</th><th>Zone/Scope</th><th>City</th>
+            <th>Assigned</th><th>Completed</th><th>In Progress</th><th>Pending</th><th>Expired</th><th>Reissued</th>
+            <th>Completion %</th><th>Approved</th><th>Modified</th><th>Rejected</th>
+            <th>Avg Open&rarr;Submit (min)</th><th>Avg Open&rarr;Submit APPROX (legacy, min)</th><th>Avg Assign&rarr;Submit (min)</th><th>Last Completed</th>
+          </tr></thead>
+          <tbody id="mgrTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="analytics-section">
+      <div class="section-title">Top Late Employees</div>
+      <div class="filter-field filter-field-spaced">
+        <label for="lateRankBy">Rank by</label>
+        <select id="lateRankBy">
+          <option value="occurrences">Late Occurrences</option>
+          <option value="totalLateMinutes">Total Late Minutes</option>
+          <option value="maxLateMinutes">Max Single Lateness</option>
+        </select>
+      </div>
+      <div class="table-scroll">
+        <table class="data-table" id="topLateTable">
+          <thead><tr><th>Employee</th><th>Code</th><th>Designation</th><th>Zone(s)</th><th>Occurrences</th><th>Total Late Min</th><th>Max Late Min</th></tr></thead>
+          <tbody id="topLateTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="analytics-section">
+      <div class="section-title">Late Employee Detail</div>
+      <div id="lateDetailGroups"></div>
+    </div>
+
+    <div class="analytics-section">
+      <div class="section-title">Review Decision Detail</div>
+      <div class="table-scroll">
+        <table class="data-table" id="decisionTable">
+          <thead><tr><th>Date</th><th>Zone</th><th>Event</th><th>Employee</th><th>Code</th><th>Designation</th><th>Decision</th><th>Reviewer</th><th>Rev</th></tr></thead>
+          <tbody id="decisionTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+</div>
+<script src="period-analytics.js"></script>
+</body>
+</html>

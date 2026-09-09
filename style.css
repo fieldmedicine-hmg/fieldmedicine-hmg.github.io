@@ -37,3 +37,36 @@ button:disabled { opacity: 0.5; cursor: default; }
 .group-title { font-size: 16px; font-weight: bold; letter-spacing: 0.02em; }
 .routing-error { color: #990000; font-size: 13px; margin-top: 6px; font-style: italic; }
 input[type="date"] { font-size: 16px; padding: 8px 10px; border: 1px solid #d0d0d0; border-radius: 4px; margin-top: 4px; }
+
+/* Period Analytics (additive - new page only, no existing rule changed) */
+.analytics-wrap { max-width: 1080px; }
+.analytics-nav { font-size: 12px; margin-bottom: 12px; }
+.analytics-nav-spaced { margin-top: 16px; }
+.analytics-nav a { color: #1a1a1a; }
+.filter-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; border: 1px solid #d0d0d0; border-radius: 4px; padding: 12px; margin-bottom: 16px; }
+.filter-field { display: flex; flex-direction: column; font-size: 12px; color: #6b6e76; gap: 3px; }
+.filter-field select, .filter-field input[type="date"], .filter-field input[type="text"] { font-size: 13px; padding: 6px 8px; border: 1px solid #d0d0d0; border-radius: 4px; min-width: 130px; }
+.filter-field.checkbox { flex-direction: row; align-items: center; gap: 6px; font-size: 13px; color: #1a1a1a; }
+.filter-field-spaced { margin-bottom: 8px; }
+.analytics-section { margin-bottom: 24px; }
+.section-title { font-size: 15px; font-weight: bold; margin-bottom: 8px; padding-bottom: 4px; border-bottom: 1px solid #d0d0d0; }
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin-bottom: 10px; }
+.stat-box { border: 1px solid #d0d0d0; border-radius: 4px; padding: 10px; }
+.stat-value { font-size: 20px; font-weight: bold; }
+.stat-label { font-size: 11px; color: #6b6e76; text-transform: uppercase; letter-spacing: 0.03em; }
+.table-scroll { overflow-x: auto; border: 1px solid #d0d0d0; border-radius: 4px; }
+table.data-table { border-collapse: collapse; width: 100%; font-size: 12px; white-space: nowrap; }
+table.data-table th, table.data-table td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #eee; }
+table.data-table th { background: #1a1a1a; color: #fff; font-weight: bold; position: sticky; top: 0; }
+table.data-table tbody tr:hover { background: #f6f6f6; }
+.rank-cards { display: flex; flex-wrap: wrap; gap: 10px; }
+.rank-card { border: 1px solid #d0d0d0; border-radius: 4px; padding: 10px 12px; min-width: 200px; }
+.rank-card .rank-title { font-size: 11px; color: #6b6e76; text-transform: uppercase; margin-bottom: 4px; }
+.rank-card .rank-value { font-weight: bold; }
+.rank-card .rank-sample { font-size: 11px; color: #6b6e76; }
+.sortable { cursor: pointer; }
+.sortable::after { content: ' \2195'; opacity: 0.5; }
+.empty-note { color: #6b6e76; font-size: 13px; padding: 10px 0; }
+details.detail-group { border: 1px solid #d0d0d0; border-radius: 4px; margin-bottom: 6px; }
+details.detail-group summary { padding: 8px 10px; cursor: pointer; font-size: 13px; }
+details.detail-group .table-scroll { border: none; border-top: 1px solid #d0d0d0; }
