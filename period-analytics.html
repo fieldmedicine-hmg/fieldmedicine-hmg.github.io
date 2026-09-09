@@ -60,6 +60,43 @@
     </div>
   </div>
 
+  <div class="analytics-section">
+    <div class="section-title">Period Report — PDF / Excel</div>
+    <div class="meta">Combines Manager/Reviewer performance, attendance performance, employee lateness, and employee-level detail into one polished, downloadable management report.</div>
+    <div class="filter-bar" id="periodReportFilterBar">
+      <div class="filter-field">
+        <label for="prFromDate">From Date</label>
+        <input type="date" id="prFromDate">
+      </div>
+      <div class="filter-field">
+        <label for="prToDate">To Date</label>
+        <input type="date" id="prToDate">
+      </div>
+      <div class="filter-field">
+        <label for="prCity">City</label>
+        <select id="prCity"><option value="">All</option></select>
+      </div>
+      <div class="filter-field">
+        <label for="prZone">Zone</label>
+        <select id="prZone"><option value="">All</option></select>
+      </div>
+      <div class="filter-field">
+        <label for="prReviewType">Review Type</label>
+        <select id="prReviewType">
+          <option value="">All</option>
+          <option value="ZONE">Zone Manager</option>
+          <option value="DOCTORS">Doctors</option>
+        </select>
+      </div>
+      <div class="filter-field">
+        <button id="prGeneratePdfBtn" class="btn-primary">Generate PDF</button>
+        <button id="prGenerateExcelBtn" class="btn-secondary">Generate Excel</button>
+      </div>
+    </div>
+    <div id="prStatusMsg" class="meta"></div>
+    <div id="prResult"></div>
+  </div>
+
   <div id="statusMsg" class="meta"></div>
   <div id="resultsHost" hidden>
 

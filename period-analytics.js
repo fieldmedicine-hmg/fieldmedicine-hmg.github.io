@@ -191,6 +191,10 @@
     (data.managerPerformance || []).forEach(function (m) { if (m.scope && m.reviewType === 'ZONE') zones[m.scope] = true; if (m.city) cities[m.city] = true; reviewers[m.reviewerName] = true; });
     fillSelect(document.getElementById('zoneFilter'), Object.keys(zones).sort(), document.getElementById('zoneFilter').value);
     fillSelect(document.getElementById('cityFilter'), Object.keys(cities).sort(), document.getElementById('cityFilter').value);
+    // Period Report's own City/Zone dropdowns - filled from the same
+    // Load() response rather than a second lookup call.
+    fillSelect(document.getElementById('prCity'), Object.keys(cities).sort(), document.getElementById('prCity').value);
+    fillSelect(document.getElementById('prZone'), Object.keys(zones).sort(), document.getElementById('prZone').value);
   }
 
   function load() {
@@ -258,6 +262,142 @@
     document.getElementById('fromDate').value = iso(weekAgo);
   })();
 
+  // ================== PERIOD REPORT (PDF / Excel) ==================
+  // Stays under the SAME Analytics Admin token as the rest of this page -
+  // deliberately NOT exposed from the employee Control Center. Both
+  // buttons POST to production (via this same secret-gated Worker
+  // bridge, postToProduction branch) and reuse the exact progress-bar/
+  // ETA pattern already approved for report generation and Data Sync.
+  (function initPeriodReport() {
+    (function setDefaultDates() {
+      var today = new Date();
+      var weekAgo = new Date(today.getTime() - 6 * 24 * 60 * 60 * 1000);
+      function iso(d) { return d.toISOString().slice(0, 10); }
+      document.getElementById('prToDate').value = iso(today);
+      document.getElementById('prFromDate').value = iso(weekAgo);
+    })();
+
+    var resultHost = document.getElementById('prResult');
+    function setPrMsg(text) { document.getElementById('prStatusMsg').textContent = text || ''; }
+
+    var PERIOD_REPORT_STAGES = ['Preparing data', 'Calculating manager performance', 'Calculating attendance metrics', 'Building report', 'Saving report', 'Finalizing'];
+    function stageForPeriodProgress(pct) {
+      if (pct < 12) return PERIOD_REPORT_STAGES[0];
+      if (pct < 35) return PERIOD_REPORT_STAGES[1];
+      if (pct < 55) return PERIOD_REPORT_STAGES[2];
+      if (pct < 80) return PERIOD_REPORT_STAGES[3];
+      if (pct < 94) return PERIOD_REPORT_STAGES[4];
+      return PERIOD_REPORT_STAGES[5];
+    }
+    function estimatedPeriodProgressPct(elapsedMs, estimatedMs) {
+      var ratio = elapsedMs / estimatedMs;
+      return Math.min(96, (1 - Math.exp(-1.1 * ratio)) * 96);
+    }
+
+    function generatePeriodReport(format) {
+      if (!ADMIN_TOKEN) { setPrMsg('Access token required - open this page using your Period Analytics access link.'); return; }
+      var fromStr = document.getElementById('prFromDate').value;
+      var toStr = document.getElementById('prToDate').value;
+      if (!fromStr || !toStr) { setPrMsg('Pick both a From and To date.'); return; }
+
+      var pdfBtn = document.getElementById('prGeneratePdfBtn');
+      var excelBtn = document.getElementById('prGenerateExcelBtn');
+      pdfBtn.disabled = true; excelBtn.disabled = true;
+      var activeBtn = format === 'pdf' ? pdfBtn : excelBtn;
+      activeBtn.textContent = format === 'pdf' ? 'Generating PDF…' : 'Generating Excel…';
+      setPrMsg('');
+
+      var reportLabel = format === 'pdf' ? 'PDF' : 'Excel';
+      // Excel (a spreadsheet write per section) has run consistently
+      // faster than the Slides-based PDF in practice - separate estimates
+      // keep the ETA honest for each format rather than one shared guess.
+      var estimatedSeconds = format === 'pdf' ? 45 : 30;
+      var startTime = Date.now();
+      resultHost.innerHTML = '';
+      var panel = el('div', 'control-card');
+      var title = el('div', 'group-title', 'Generating Period Report (' + reportLabel + ')');
+      var barOuter = el('div', 'progress-bar-outer');
+      var barInner = el('div', 'progress-bar-inner');
+      barOuter.appendChild(barInner);
+      var pctText = el('div', 'progress-pct', '0%');
+      var stageText = el('div', 'meta', 'Current stage: ' + PERIOD_REPORT_STAGES[0]);
+      var timeText = el('div', 'meta', 'Elapsed: 0 sec');
+      var note = el('div', 'meta progress-estimate-note', 'Percentage and time remaining are estimates based on typical report durations, not exact backend progress.');
+      panel.appendChild(title); panel.appendChild(barOuter); panel.appendChild(pctText);
+      panel.appendChild(stageText); panel.appendChild(timeText); panel.appendChild(note);
+      resultHost.appendChild(panel);
+
+      var tickHandle = setInterval(function () {
+        var elapsedMs = Date.now() - startTime;
+        var pct = estimatedPeriodProgressPct(elapsedMs, estimatedSeconds * 1000);
+        barInner.style.width = pct.toFixed(0) + '%';
+        pctText.textContent = pct.toFixed(0) + '%';
+        stageText.textContent = 'Current stage: ' + stageForPeriodProgress(pct);
+        var elapsedSec = Math.round(elapsedMs / 1000);
+        var remainingMs = estimatedSeconds * 1000 - elapsedMs;
+        timeText.textContent = 'Elapsed: ' + elapsedSec + ' sec' +
+          (remainingMs > 1500 ? ' · Estimated remaining: ~' + Math.round(remainingMs / 1000) + ' sec' : ' · finishing up…');
+      }, 400);
+
+      var payload = {
+        reportBridgeToken: ADMIN_TOKEN, fromStr: fromStr, toStr: toStr,
+        city: document.getElementById('prCity').value, zone: document.getElementById('prZone').value,
+        reviewType: document.getElementById('prReviewType').value,
+      };
+
+      bridgePost(format === 'pdf' ? 'generatePeriodReportPdf' : 'generatePeriodReportExcel', payload).then(function (res) {
+        clearInterval(tickHandle);
+        pdfBtn.disabled = false; excelBtn.disabled = false;
+        pdfBtn.textContent = 'Generate PDF'; excelBtn.textContent = 'Generate Excel';
+        var elapsedSec = Math.round((Date.now() - startTime) / 1000);
+
+        if (!res.ok) {
+          resultHost.innerHTML = '';
+          resultHost.appendChild(el('div', 'meta report-error', 'Error: ' + res.error));
+          return;
+        }
+
+        resultHost.innerHTML = '';
+        var doneBox = el('div', 'control-card');
+        doneBox.appendChild(el('div', 'group-title', 'Period Report Ready ✓'));
+        doneBox.appendChild(el('div', 'meta', 'Period: ' + fromStr + ' → ' + toStr));
+        var linkLine = el('div', 'meta');
+        if (format === 'pdf') {
+          linkLine.appendChild(document.createTextNode('PDF: '));
+          var pdfLink = document.createElement('a');
+          pdfLink.href = res.pdfUrl; pdfLink.target = '_blank'; pdfLink.rel = 'noopener'; pdfLink.textContent = 'Open';
+          linkLine.appendChild(pdfLink);
+          linkLine.appendChild(document.createTextNode(' · '));
+          var slidesLink = document.createElement('a');
+          slidesLink.href = res.url; slidesLink.target = '_blank'; slidesLink.rel = 'noopener'; slidesLink.textContent = 'Open Slides source';
+          linkLine.appendChild(slidesLink);
+        } else {
+          linkLine.appendChild(document.createTextNode('Excel: '));
+          var excelLink = document.createElement('a');
+          excelLink.href = res.excelUrl; excelLink.target = '_blank'; excelLink.rel = 'noopener'; excelLink.textContent = 'Download';
+          linkLine.appendChild(excelLink);
+          linkLine.appendChild(document.createTextNode(' · '));
+          var sheetLink = document.createElement('a');
+          sheetLink.href = res.url; sheetLink.target = '_blank'; sheetLink.rel = 'noopener'; sheetLink.textContent = 'Open in Sheets';
+          linkLine.appendChild(sheetLink);
+        }
+        doneBox.appendChild(linkLine);
+        doneBox.appendChild(el('div', 'meta', 'Completed in: ' + elapsedSec + ' sec'));
+        resultHost.appendChild(doneBox);
+      }).catch(function () {
+        clearInterval(tickHandle);
+        pdfBtn.disabled = false; excelBtn.disabled = false;
+        pdfBtn.textContent = 'Generate PDF'; excelBtn.textContent = 'Generate Excel';
+        resultHost.innerHTML = '';
+        resultHost.appendChild(el('div', 'meta report-slow-notice',
+          'Could not confirm the report finished. It may still be completing - check back shortly rather than generating again.'));
+      });
+    }
+
+    document.getElementById('prGeneratePdfBtn').addEventListener('click', function () { generatePeriodReport('pdf'); });
+    document.getElementById('prGenerateExcelBtn').addEventListener('click', function () { generatePeriodReport('excel'); });
+  })();
+
   // UX-only early notice (see the real check inside load()) - just tells
   // a visitor with no token why nothing will happen before they even
   // click Load, and keeps the filter bar visibly present with zero data
@@ -265,5 +405,7 @@
   if (!ADMIN_TOKEN) {
     setMsg('Access token required - open this page using your Period Analytics access link. No data is available without it.');
     document.getElementById('loadBtn').disabled = true;
+    document.getElementById('prGeneratePdfBtn').disabled = true;
+    document.getElementById('prGenerateExcelBtn').disabled = true;
   }
 })();
