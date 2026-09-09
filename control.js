@@ -245,16 +245,14 @@
 
     function setReportMsg(text) { document.getElementById('reportStatusMsg').textContent = text || ''; }
 
-    function renderReportResults(files) {
-      var host = document.getElementById('reportResults');
-      host.innerHTML = '';
+    function renderReportFiles(files, host) {
       if (!files || !files.length) { host.appendChild(el('div', 'meta', 'No files were generated.')); return; }
       files.forEach(function (f) {
         var box = el('div', 'control-card');
         box.appendChild(el('div', 'meta', (f.city || '') + (f.date ? ' · ' + f.date : '') + (f.period ? ' · ' + f.period : '')));
         if (f.pdfUrl) {
           var pdfLink = document.createElement('a');
-          pdfLink.href = f.pdfUrl; pdfLink.target = '_blank'; pdfLink.rel = 'noopener'; pdfLink.textContent = 'Open PDF';
+          pdfLink.href = f.pdfUrl; pdfLink.target = '_blank'; pdfLink.rel = 'noopener'; pdfLink.textContent = 'Open Report';
           box.appendChild(pdfLink);
         }
         if (f.url) {
@@ -267,12 +265,83 @@
       });
     }
 
+    // Typical observed generation durations, used ONLY to drive a client-
+    // side progress ESTIMATE - never a real backend signal (the backend
+    // has no progress-reporting mechanism, and this bridge is intentionally
+    // a single request/response with nothing in between). Deliberately
+    // conservative; the curve below keeps creeping forward past this
+    // point rather than freezing, so a slower-than-usual run never reads
+    // as stuck.
+    var REPORT_ESTIMATED_SECONDS = { ATTENDANCE: 50, EMPLOYEE_HOURS: 60 };
+    var REPORT_STAGES = ['Preparing data', 'Building report', 'Saving report', 'Finalizing'];
+
+    function stageForProgress(pct) {
+      if (pct < 25) return REPORT_STAGES[0];
+      if (pct < 70) return REPORT_STAGES[1];
+      if (pct < 92) return REPORT_STAGES[2];
+      return REPORT_STAGES[3];
+    }
+
+    // Asymptotic curve - rises quickly at first, then slows, but never
+    // fully stops (always keeps inching toward, and just under, 96%) even
+    // well past the typical duration, so it never visibly sits frozen at
+    // one number while the request is still genuinely in flight.
+    function estimatedProgressPct(elapsedMs, estimatedMs) {
+      var ratio = elapsedMs / estimatedMs;
+      return Math.min(96, (1 - Math.exp(-1.1 * ratio)) * 96);
+    }
+
+    function buildProgressPanel(titleText) {
+      var host = document.getElementById('reportResults');
+      host.innerHTML = '';
+      var panel = el('div', 'control-card');
+      var title = el('div', 'group-title', titleText);
+      var barOuter = el('div', 'progress-bar-outer');
+      var barInner = el('div', 'progress-bar-inner');
+      barOuter.appendChild(barInner);
+      var pctText = el('div', 'progress-pct', '0%');
+      var stageText = el('div', 'meta', 'Current stage: ' + REPORT_STAGES[0]);
+      var etaText = el('div', 'meta', 'Estimated time remaining: calculating…');
+      var note = el('div', 'meta progress-estimate-note', 'Percentage and time remaining are estimates based on typical report durations, not exact backend progress.');
+      panel.appendChild(title);
+      panel.appendChild(barOuter);
+      panel.appendChild(pctText);
+      panel.appendChild(stageText);
+      panel.appendChild(etaText);
+      panel.appendChild(note);
+      host.appendChild(panel);
+      return { host: host, panel: panel, title: title, barInner: barInner, pctText: pctText, stageText: stageText, etaText: etaText };
+    }
+
     function generateReport() {
       var btn = document.getElementById('generateReportBtn');
       btn.disabled = true;
       btn.textContent = 'Generating…';
-      setReportMsg('Generating report - this can take a little while for a full-month or multi-city run…');
-      document.getElementById('reportResults').innerHTML = '';
+      setReportMsg('');
+
+      var reportTypeLabel = typeSel.value === 'ATTENDANCE' ? 'Attendance Report' : 'Employee Hours Report';
+      var estimatedMs = (REPORT_ESTIMATED_SECONDS[typeSel.value] || 55) * 1000;
+      var startTime = Date.now();
+      var slowNoticeShown = false;
+      var ui = buildProgressPanel('Generating ' + reportTypeLabel);
+
+      var tickHandle = setInterval(function () {
+        var elapsed = Date.now() - startTime;
+        var pct = estimatedProgressPct(elapsed, estimatedMs);
+        ui.barInner.style.width = pct.toFixed(0) + '%';
+        ui.pctText.textContent = pct.toFixed(0) + '%';
+        ui.stageText.textContent = 'Current stage: ' + stageForProgress(pct);
+        var remainingMs = estimatedMs - elapsed;
+        ui.etaText.textContent = remainingMs > 1500
+          ? 'Estimated time remaining: ~' + Math.round(remainingMs / 1000) + ' seconds'
+          : 'Estimated time remaining: finishing up…';
+        // A soft cue only - the request is still genuinely in flight, this
+        // is not a failure state and nothing here retries or cancels it.
+        if (elapsed > estimatedMs * 1.6 && !slowNoticeShown) {
+          slowNoticeShown = true;
+          setReportMsg('Still working - this report is taking a bit longer than usual.');
+        }
+      }, 400);
 
       var payload = {
         reportBridgeToken: ADMIN_TOKEN,
@@ -289,15 +358,41 @@
       }
 
       bridgePost('generateV5Report', payload).then(function (res) {
+        clearInterval(tickHandle);
         btn.disabled = false;
         btn.textContent = 'Generate Report';
-        if (!res.ok) { setReportMsg('Error: ' + res.error); return; }
-        setReportMsg('Done.');
-        renderReportResults(res.files);
-      }).catch(function (e) {
+        setReportMsg('');
+
+        if (!res.ok) {
+          // A real, confirmed backend response - the backend itself says
+          // this did not succeed, so a definitive failure state is
+          // accurate here (unlike the network-level case in .catch below).
+          ui.host.innerHTML = '';
+          ui.host.appendChild(el('div', 'meta report-error', 'Error: ' + res.error));
+          return;
+        }
+
+        var elapsedSec = Math.round((Date.now() - startTime) / 1000);
+        ui.title.textContent = reportTypeLabel + ' Ready';
+        ui.barInner.style.width = '100%';
+        ui.pctText.textContent = '100% ✓';
+        ui.stageText.textContent = 'Completed in ' + elapsedSec + ' seconds';
+        ui.etaText.textContent = '';
+        renderReportFiles(res.files, ui.host);
+      }).catch(function () {
+        clearInterval(tickHandle);
         btn.disabled = false;
         btn.textContent = 'Generate Report';
-        setReportMsg('Network error: ' + e.message);
+        setReportMsg('');
+        // A network-level failure (e.g. the Worker/browser relay timing
+        // out) is NOT proof the backend failed - production may already
+        // have created the real Drive file by the time this rejects.
+        // Never claim a definitive failure here, and never auto-retry
+        // (that could create a duplicate report) - the user decides when
+        // to check Reports or try again.
+        ui.host.innerHTML = '';
+        ui.host.appendChild(el('div', 'meta report-slow-notice',
+          'Report generation is taking longer than usual. It may still be completing in Drive. Please check Reports shortly before trying again.'));
       });
     }
     document.getElementById('generateReportBtn').addEventListener('click', generateReport);

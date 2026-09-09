@@ -70,3 +70,11 @@ table.data-table tbody tr:hover { background: #f6f6f6; }
 details.detail-group { border: 1px solid #d0d0d0; border-radius: 4px; margin-bottom: 6px; }
 details.detail-group summary { padding: 8px 10px; cursor: pointer; font-size: 13px; }
 details.detail-group .table-scroll { border: none; border-top: 1px solid #d0d0d0; }
+
+/* Report generation progress (additive - client-side estimate only) */
+.progress-bar-outer { background: #efefef; border-radius: 4px; height: 10px; margin: 10px 0 8px; overflow: hidden; }
+.progress-bar-inner { background: #1a1a1a; height: 100%; border-radius: 4px; width: 0%; transition: width 0.4s ease-out; }
+.progress-pct { font-size: 20px; font-weight: bold; }
+.progress-estimate-note { font-style: italic; font-size: 11px; }
+.report-error { color: #990000; }
+.report-slow-notice { color: #7f5f01; }
