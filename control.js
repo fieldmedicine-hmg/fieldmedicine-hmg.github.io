@@ -4,23 +4,12 @@
   var BACKEND = 'https://script.google.com/macros/s/AKfycbxcVYWRoQRe429lHHZsReYvJ3qVmD-EAK2WdWtY51iXxX0YOuW1-FqlAfd-1-AjdSpD/exec';
   var WRITE_BRIDGE = 'https://hmg-write-bridge-poc.fieldmedicine1.workers.dev/';
 
-  // Kept in this page's own localStorage - never sent anywhere except
-  // back to this same backend, never shown to the reviewer (the reviewer
-  // only ever receives the plain manager URL, exactly as the real
-  // product's WhatsApp link works). Persisted (not just in-memory) so
-  // reloading this Control Center page can still check status without
-  // minting a new assignment - see requirement "refresh status without
-  // recreating the assignment".
-  var STORAGE_KEY = 'hmgControlState';
-  var state = { token: null, managerUrl: null, expiresAt: null, baselinePending: null, reviewer: null, whatsapp: null, zone: null, reviewDate: null };
-  try {
-    var saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
-    if (saved && saved.token) state = saved;
-  } catch (e) { /* private browsing or corrupted value - start fresh */ }
-
-  function saveState() {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) { /* ignore */ }
-  }
+  // ONLY a convenience - remembers the last date picked so a reload
+  // starts on the same day. Never a source of truth for card/assignment
+  // state: every render re-fetches discoverGroups from the backend, so
+  // a reload or a routing change always reflects live sheet data, never
+  // stale localStorage.
+  var LAST_DATE_KEY = 'hmgControlLastDate';
 
   function jsonpGet(action, params) {
     return new Promise(function (resolve, reject) {
@@ -51,8 +40,8 @@
     });
   }
 
-  // The one CONTROL-side mutation (mint/reset) - POST-only, through the
-  // same Worker bridge as every reviewer write action, never a bare GET.
+  // The one CONTROL-side mutation (prepare/reissue) - POST-only, through
+  // the same Worker bridge as every reviewer write action, never a bare GET.
   function bridgePost(action, extra) {
     return fetch(WRITE_BRIDGE, {
       method: 'POST',
@@ -61,29 +50,20 @@
     }).then(function (r) { return r.json(); });
   }
 
-  // source: 'control' tells the backend this is the preparer checking
-  // status, not the reviewer opening the link - it must NOT bump the
-  // "Last Accessed" bookkeeping the reviewer page's own reads do, or the
-  // status here would falsely jump to OPENED before the reviewer ever
-  // taps the link themselves.
-  function checkStatus(token) {
-    return jsonpGet('getData', { token: token, source: 'control' });
-  }
-
   function setMsg(text) { document.getElementById('statusMsg').textContent = text || ''; }
 
-  // Shown on the control page only (never sent anywhere) - shoulder-surf
-  // protection. The real number is still used, unmasked, to build the
-  // WhatsApp link itself; masking is a display-only precaution.
-  function maskPhone(raw) {
-    var s = String(raw || '');
-    return s.length > 2 ? s.slice(0, -4).replace(/./g, '*') + s.slice(-4) : s;
+  function el(tag, className, text) {
+    var e = document.createElement(tag);
+    if (className) e.className = className;
+    if (text !== undefined && text !== null) e.textContent = text;
+    return e;
   }
 
-  // wa.me needs the full international number, digits only, no leading
-  // zero or plus. Saudi numbers in the sheet may be stored as a local
-  // 05XXXXXXXX number, a bare 5XXXXXXXX, or already-international -
-  // normalize all three to the one form wa.me accepts.
+  function maskPhone(raw) {
+    var s = String(raw == null ? '' : raw);
+    return s.length > 4 ? s.slice(0, -4).replace(/./g, '*') + s.slice(-4) : s;
+  }
+
   function normalizeSaudiPhone(raw) {
     var digits = String(raw || '').replace(/[^0-9]/g, '');
     if (digits.indexOf('00') === 0) digits = digits.slice(2);
@@ -93,114 +73,116 @@
     return digits;
   }
 
-  // OPENED means the reviewer has loaded the page but decided
-  // nothing yet; IN PROGRESS means at least one decision has been made
-  // this cycle. We only know "this cycle's" pending baseline from the
-  // very first status check right after Prepare, so record it then.
-  function classify(data) {
-    if (state.expiresAt && new Date(state.expiresAt) < new Date()) return 'EXPIRED';
-    if (data.completed) return 'COMPLETED';
-    if (!data.lastAccessed) return 'PREPARED';
-    var pendingCount = (data.rows || []).filter(function (r) { return r.decision === 'PENDING'; }).length;
-    if (state.baselinePending === undefined || state.baselinePending === null) { state.baselinePending = pendingCount; saveState(); }
-    return pendingCount < state.baselinePending ? 'IN_PROGRESS' : 'OPENED';
+  function groupLabel(card) {
+    return card.reviewType === 'DOCTORS' ? 'DOCTORS' : card.zone.toUpperCase();
+  }
+  function scopeLabel(card) {
+    return card.reviewType === 'DOCTORS' ? 'All Zones' : 'Zone Staff';
+  }
+  function countLabel(card) {
+    return card.count + (card.reviewType === 'DOCTORS' ? (card.count === 1 ? ' doctor' : ' doctors') : (card.count === 1 ? ' employee' : ' employees'));
   }
 
-  function renderStatus(data) {
-    var status = classify(data);
-    var tag = document.getElementById('statusTag');
-    tag.textContent = status.replace('_', ' ');
-    tag.className = 'tag tag-' + status;
-  }
-
-  function showResult() {
-    document.getElementById('resultCard').hidden = false;
-    document.getElementById('reviewerName').textContent = state.reviewer;
-    document.getElementById('waMasked').textContent = maskPhone(state.whatsapp);
-    document.getElementById('resolvedZone').textContent = state.zone === 'ALL' ? 'All Zones (Doctors)' : state.zone;
-    document.getElementById('resolvedDate').textContent = state.reviewDate;
-    document.getElementById('urlBox').textContent = state.managerUrl;
-    document.getElementById('expiryLine').textContent = 'Expires: ' + new Date(state.expiresAt).toLocaleString() + ' (exactly 24 hours after Prepare)';
-    var waText = encodeURIComponent('HMG Attendance Review — please review: ' + state.managerUrl);
-    document.getElementById('whatsappBtn').onclick = function () {
-      window.open('https://wa.me/' + normalizeSaudiPhone(state.whatsapp) + '?text=' + waText, '_blank');
-    };
-    var tag = document.getElementById('statusTag');
-    tag.textContent = 'PREPARED';
-    tag.className = 'tag tag-PREPARED';
-  }
-
-  // Doctors scope is always "all zones" server-side (matches production's
-  // Routing.gs) - the Zone selector is irrelevant for that type, so it's
-  // disabled rather than sent-but-ignored, to avoid implying it matters.
-  document.getElementById('typeSelect').addEventListener('change', function () {
-    var isDoctors = this.value === 'DOCTORS';
-    document.getElementById('zoneSelect').disabled = isDoctors;
-    document.getElementById('zoneField').style.opacity = isDoctors ? '0.5' : '1';
-  });
-
-  document.getElementById('prepareBtn').addEventListener('click', function () {
-    var btn = this;
-    var reviewType = document.getElementById('typeSelect').value;
-    var zone = document.getElementById('zoneSelect').value;
+  function reload() {
     var reviewDate = document.getElementById('reviewDateInput').value;
-    if (!reviewDate) { setMsg('Review Date is required.'); return; }
+    if (!reviewDate) return;
+    try { localStorage.setItem(LAST_DATE_KEY, reviewDate); } catch (e) { /* ignore */ }
+    setMsg('Loading…');
+    var host = document.getElementById('cardsHost');
+    while (host.firstChild) host.removeChild(host.firstChild);
 
-    btn.disabled = true;
-    btn.textContent = 'Preparing…';
-    setMsg('');
-    var payload = { reviewDate: reviewDate, reviewType: reviewType };
-    if (reviewType === 'ZONE') payload.zone = zone;
-    bridgePost('prepareReview', payload).then(function (res) {
-      btn.disabled = false;
-      btn.textContent = 'Prepare Review';
-      if (!res.ok) {
-        // No sheet write happened on a routing failure (no active route /
-        // ambiguous route) - the error is shown as-is, never guessed past.
-        setMsg('Error: ' + res.error);
-        document.getElementById('resultCard').hidden = true;
+    jsonpGet('discoverGroups', { reviewDate: reviewDate }).then(function (data) {
+      if (!data.ok) { setMsg('Error: ' + data.error); return; }
+      setMsg('');
+      if (!data.cards.length) {
+        host.appendChild(el('div', 'meta', 'No attendance found for this date.'));
         return;
       }
-      state.token = res.token;
-      state.managerUrl = res.managerUrl;
-      state.expiresAt = res.expiresAt;
-      state.reviewer = res.reviewer;
-      state.whatsapp = res.whatsapp;
-      state.zone = res.zone;
-      state.reviewDate = res.reviewDate;
-      state.baselinePending = null;
-      saveState();
-      showResult();
+      data.cards.forEach(function (card) { host.appendChild(renderCard(card, reviewDate)); });
     }).catch(function (e) {
-      btn.disabled = false;
-      btn.textContent = 'Prepare Review';
       setMsg('Network error: ' + e.message);
     });
-  });
-
-  document.getElementById('refreshBtn').addEventListener('click', function () {
-    if (!state.token) return;
-    var btn = this;
-    btn.disabled = true;
-    btn.textContent = 'Refreshing…';
-    checkStatus(state.token).then(function (data) {
-      btn.disabled = false;
-      btn.textContent = 'Refresh Status';
-      if (!data.ok) { setMsg('Error: ' + data.error); return; }
-      renderStatus(data);
-    }).catch(function (e) {
-      btn.disabled = false;
-      btn.textContent = 'Refresh Status';
-      setMsg('Network error: ' + e.message);
-    });
-  });
-
-  // Restore a previously-prepared assignment on reload, so the preparer
-  // can come back and check status without minting a fresh token.
-  if (state.token) {
-    showResult();
-    checkStatus(state.token).then(function (data) {
-      if (data && data.ok) renderStatus(data);
-    }).catch(function () { /* leave the PREPARED default shown */ });
   }
+
+  function renderCard(card, reviewDate) {
+    var box = el('div', 'control-card');
+    box.appendChild(el('div', 'group-title', groupLabel(card)));
+    box.appendChild(el('div', 'meta', scopeLabel(card) + ' · ' + countLabel(card)));
+
+    if (card.routingError) {
+      box.appendChild(el('div', 'meta', 'Reviewer: —'));
+      var errLine = el('div', 'routing-error', card.routingError.indexOf('ambiguity') !== -1 ? 'Routing ambiguity' : 'Reviewer not configured');
+      box.appendChild(errLine);
+      return box;
+    }
+
+    box.appendChild(el('div', 'meta', 'Reviewer: ' + card.reviewer));
+    if (card.whatsapp) box.appendChild(el('div', 'meta', 'WhatsApp: ' + maskPhone(card.whatsapp)));
+
+    var statusLine = el('div', 'status-line');
+    var tag = el('span', 'tag tag-' + (card.status === 'NONE' ? 'PENDING' : card.status), card.status === 'NONE' ? 'NOT SENT' : card.status.replace('_', ' '));
+    statusLine.appendChild(tag);
+    box.appendChild(statusLine);
+
+    var actions = el('div', 'row-actions');
+
+    if (card.status === 'NONE') {
+      var prepareBtn = el('button', 'btn-primary', 'Prepare');
+      prepareBtn.addEventListener('click', function () { doPrepare(card, reviewDate, false, prepareBtn, box); });
+      actions.appendChild(prepareBtn);
+    } else if (card.status === 'EXPIRED') {
+      var reissueBtn = el('button', 'btn-primary', 'Reissue');
+      reissueBtn.addEventListener('click', function () { doPrepare(card, reviewDate, true, reissueBtn, box); });
+      actions.appendChild(reissueBtn);
+    } else if (card.status === 'COMPLETED') {
+      // No send button - a completed review is done; only an explicit
+      // reissue (which only applies once it expires) can reopen it.
+    } else {
+      // PREPARED / OPENED / IN_PROGRESS - link already exists and is
+      // still valid; offer to open WhatsApp again with that same link.
+      var waBtn = el('button', 'btn-primary', 'Open WhatsApp');
+      waBtn.addEventListener('click', function () {
+        var msg = encodeURIComponent('HMG Attendance Review — ' + reviewDate + ' · ' + groupLabel(card) + ': ' + card.managerUrl);
+        window.open('https://wa.me/' + normalizeSaudiPhone(card.whatsapp) + '?text=' + msg, '_blank');
+      });
+      actions.appendChild(waBtn);
+    }
+
+    box.appendChild(actions);
+    return box;
+  }
+
+  function doPrepare(card, reviewDate, reissue, btn, box) {
+    btn.disabled = true;
+    btn.textContent = reissue ? 'Reissuing…' : 'Preparing…';
+    var payload = { reviewDate: reviewDate, reviewType: card.reviewType };
+    if (card.reviewType === 'ZONE') payload.zone = card.zone;
+    if (reissue) payload.reissue = 'true';
+    bridgePost('prepareReview', payload).then(function (res) {
+      if (!res.ok) {
+        setMsg('Error: ' + res.error);
+        btn.disabled = false;
+        btn.textContent = reissue ? 'Reissue' : 'Prepare';
+        return;
+      }
+      // Always re-render this card from a fresh backend read rather than
+      // trusting the mutation response alone as UI state - the backend
+      // stays the single source of truth even immediately after a write.
+      reload();
+    }).catch(function (e) {
+      setMsg('Network error: ' + e.message);
+      btn.disabled = false;
+      btn.textContent = reissue ? 'Reissue' : 'Prepare';
+    });
+  }
+
+  document.getElementById('reviewDateInput').addEventListener('change', reload);
+
+  // Restore only the LAST DATE (a convenience), then always reload from
+  // the backend - never assume localStorage reflects current status.
+  try {
+    var savedDate = localStorage.getItem(LAST_DATE_KEY);
+    if (savedDate) document.getElementById('reviewDateInput').value = savedDate;
+  } catch (e) { /* ignore */ }
+  reload();
 })();

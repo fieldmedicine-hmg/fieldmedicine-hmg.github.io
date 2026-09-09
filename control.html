@@ -11,47 +11,15 @@
 <body>
 <div class="wrap">
   <div class="brand">HMG TEST CONTROL CENTER — ISOLATED POC</div>
-  <div class="note">This is an isolated TEST-only launcher — it does not touch the real HMG production Control Center, deployment, or manager data. The reviewer is NEVER hardcoded here: it is resolved live from Review_Routing on every Prepare, exactly like production's Routing.gs rules (Paramedic/Nurse → that Zone's manager; Doctors → the dedicated Doctors reviewer, never a Zone Manager; inactive routes are never selected).</div>
+  <div class="note">Isolated TEST-only launcher — never touches the real HMG production Control Center, deployment, or manager data. Pick a date; every zone (and Doctors) that actually has attendance that day appears automatically, with its reviewer resolved live from Review_Routing. Nothing is hardcoded.</div>
 
   <div class="control-card">
-    <div class="control-field">
-      <label for="reviewDateInput">Review Date</label><br>
-      <input type="date" id="reviewDateInput" value="2026-09-01">
-    </div>
-    <div class="control-field" id="zoneField">
-      <label for="zoneSelect">Zone</label><br>
-      <select id="zoneSelect">
-        <option value="Diriyah">Diriyah</option>
-        <option value="BLVD City">BLVD City</option>
-      </select>
-    </div>
-    <div class="control-field">
-      <label for="typeSelect">Review Type</label><br>
-      <select id="typeSelect">
-        <option value="ZONE">Zone Staff (Paramedic/Nurse)</option>
-        <option value="DOCTORS">Doctors</option>
-      </select>
-    </div>
-    <button id="prepareBtn" class="btn-primary">Prepare Review</button>
-  </div>
-
-  <div id="resultCard" class="control-card" hidden>
-    <div class="control-field">Reviewer: <b id="reviewerName"></b></div>
-    <div class="control-field">WhatsApp: <b id="waMasked"></b></div>
-    <div class="control-field">Zone / Scope: <b id="resolvedZone"></b></div>
-    <div class="control-field">Review Date: <b id="resolvedDate"></b></div>
-    <div class="status-line">
-      <span>Status:</span>
-      <span id="statusTag" class="tag">—</span>
-      <button id="refreshBtn" class="btn-secondary">Refresh Status</button>
-    </div>
-    <div class="control-field">Manager link (share this — never the token by itself):</div>
-    <div id="urlBox" class="url-box"></div>
-    <button id="whatsappBtn" class="btn-primary">Open WhatsApp</button>
-    <div class="control-field" id="expiryLine" style="margin-top:10px;"></div>
+    <label for="reviewDateInput">Review Date</label><br>
+    <input type="date" id="reviewDateInput" value="2026-09-01">
   </div>
 
   <div id="statusMsg" class="meta"></div>
+  <div id="cardsHost"></div>
 </div>
 <script src="control.js"></script>
 </body>

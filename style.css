@@ -34,3 +34,6 @@ button:disabled { opacity: 0.5; cursor: default; }
 .control-field b { color: #1a1a1a; }
 .url-box { background: #f6f6f6; border: 1px solid #e0e0e0; border-radius: 4px; padding: 8px 10px; font-size: 12px; word-break: break-all; margin: 8px 0; }
 .status-line { display: flex; align-items: center; gap: 8px; margin: 10px 0; }
+.group-title { font-size: 16px; font-weight: bold; letter-spacing: 0.02em; }
+.routing-error { color: #990000; font-size: 13px; margin-top: 6px; font-style: italic; }
+input[type="date"] { font-size: 16px; padding: 8px 10px; border: 1px solid #d0d0d0; border-radius: 4px; margin-top: 4px; }
