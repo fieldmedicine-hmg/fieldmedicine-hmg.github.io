@@ -6,6 +6,14 @@
   var WRITE_BRIDGE = WRITE_BRIDGE_ORIGIN + '/';
   var BUILD = 'mobile-write-2';
 
+  // TEST-only rough timing instrumentation (console only, never shown to
+  // the reviewer) - per-request start times keyed by label, logged as
+  // "TIMING <label> <ms>" so they can be read back from the console
+  // during verification. Not a profiler, just wall-clock elapsed time
+  // for "how long did this feel" reporting.
+  function timeStart() { return performance.now(); }
+  function timeEnd(label, start) { console.log('TIMING ' + label + ' ' + Math.round(performance.now() - start) + 'ms'); }
+
   // Token lives only in a local variable from this point on - never
   // re-read from location.search again, and stripped from the visible
   // URL/history immediately so it doesn't linger in the address bar,
@@ -191,7 +199,9 @@
     buttons.forEach(function (b) { b.disabled = true; });
     var extra = { employeeCode: code };
     if (reason) extra.reason = reason;
+    var t0 = timeStart();
     bridgeWrite(action, extra).then(function (res) {
+      timeEnd(action, t0);
       if (res.ok) {
         var label = action === 'approve' ? 'APPROVED' : action === 'modify' ? 'MODIFIED' : 'REJECTED';
         tagEl.textContent = label;
@@ -210,7 +220,9 @@
   function bulkApprove(btn) {
     btn.disabled = true;
     btn.textContent = 'Approving remaining…';
+    var t0 = timeStart();
     bridgeWrite('bulkApproveRemaining', {}).then(function (res) {
+      timeEnd('bulkApproveRemaining', t0);
       if (res.ok) {
         jsonp('getData', {}).then(renderData);
       } else {
@@ -229,7 +241,9 @@
     if (!window.confirm('Submit this review as final? This cannot be changed afterward.')) return;
     btn.disabled = true;
     btn.textContent = 'Submitting…';
+    var t0 = timeStart();
     bridgeWrite('submitFinalReview', {}).then(function (res) {
+      timeEnd('submitFinalReview', t0);
       if (res.ok) {
         jsonp('getData', {}).then(renderData);
       } else {
@@ -261,7 +275,9 @@
   if (!TOKEN) {
     document.getElementById('status').textContent = 'No token in URL.';
   } else {
+    var loadT0 = timeStart();
     jsonp('getData', {}).then(function (data) {
+      timeEnd('initialLoad', loadT0);
       if (!data.ok) { document.getElementById('status').textContent = 'Error: ' + data.error; return; }
       renderData(data);
     }).catch(function (e) {

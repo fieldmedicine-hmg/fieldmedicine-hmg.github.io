@@ -24,3 +24,13 @@ button:disabled { opacity: 0.5; cursor: default; }
 #status { font-size: 13px; color: #6b6e76; }
 .diag-footer { margin-top: 24px; padding-top: 10px; border-top: 1px solid #eee; font-size: 11px; color: #999; }
 .diag-footer a { color: #6b6e76; }
+.tag-PREPARED { background: #efefef; color: #6b6e76; }
+.tag-OPENED { background: #dce6f7; color: #1c3d6b; }
+.tag-IN_PROGRESS { background: #fce8b2; color: #7f5f01; }
+.tag-COMPLETED { background: #d9ead3; color: #274e13; }
+.tag-EXPIRED { background: #f4cccc; color: #990000; }
+.control-card { border: 1px solid #d0d0d0; border-radius: 4px; padding: 16px; margin-bottom: 14px; }
+.control-field { margin-bottom: 8px; font-size: 13px; }
+.control-field b { color: #1a1a1a; }
+.url-box { background: #f6f6f6; border: 1px solid #e0e0e0; border-radius: 4px; padding: 8px 10px; font-size: 12px; word-break: break-all; margin: 8px 0; }
+.status-line { display: flex; align-items: center; gap: 8px; margin: 10px 0; }

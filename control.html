@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://script.google.com https://script.googleusercontent.com; style-src 'self'; connect-src https://hmg-write-bridge-poc.fieldmedicine1.workers.dev; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';">
+<title>HMG TEST Control Center (POC)</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">HMG TEST CONTROL CENTER — ISOLATED POC</div>
+  <div class="note">This is an isolated TEST-only launcher — it does not touch the real HMG production Control Center, deployment, or manager data. It prepares the SAME TEST PILOT MANAGER assignment (Diriyah, 01 September 2026) used throughout this proof of concept.</div>
+
+  <div class="control-card">
+    <div class="control-field">Reviewer: <b>TEST PILOT MANAGER</b></div>
+    <div class="control-field">Zone / Scope: <b>Diriyah</b></div>
+    <div class="control-field">Review Date: <b>01 September 2026</b></div>
+    <button id="prepareBtn" class="btn-primary">Prepare Review</button>
+  </div>
+
+  <div id="resultCard" class="control-card" hidden>
+    <div class="status-line">
+      <span>Status:</span>
+      <span id="statusTag" class="tag">—</span>
+      <button id="refreshBtn" class="btn-secondary">Refresh Status</button>
+    </div>
+    <div class="control-field">Manager link (share this — never the token by itself):</div>
+    <div id="urlBox" class="url-box"></div>
+    <button id="whatsappBtn" class="btn-primary">Open WhatsApp</button>
+    <div class="control-field" id="expiryLine" style="margin-top:10px;"></div>
+  </div>
+
+  <div id="statusMsg" class="meta"></div>
+</div>
+<script src="control.js"></script>
+</body>
+</html>
