@@ -12,7 +12,7 @@
   // minting a new assignment - see requirement "refresh status without
   // recreating the assignment".
   var STORAGE_KEY = 'hmgControlState';
-  var state = { token: null, managerUrl: null, expiresAt: null, baselinePending: null };
+  var state = { token: null, managerUrl: null, expiresAt: null, baselinePending: null, reviewer: null, whatsapp: null, zone: null, reviewDate: null };
   try {
     var saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
     if (saved && saved.token) state = saved;
@@ -72,6 +72,27 @@
 
   function setMsg(text) { document.getElementById('statusMsg').textContent = text || ''; }
 
+  // Shown on the control page only (never sent anywhere) - shoulder-surf
+  // protection. The real number is still used, unmasked, to build the
+  // WhatsApp link itself; masking is a display-only precaution.
+  function maskPhone(raw) {
+    var s = String(raw || '');
+    return s.length > 2 ? s.slice(0, -4).replace(/./g, '*') + s.slice(-4) : s;
+  }
+
+  // wa.me needs the full international number, digits only, no leading
+  // zero or plus. Saudi numbers in the sheet may be stored as a local
+  // 05XXXXXXXX number, a bare 5XXXXXXXX, or already-international -
+  // normalize all three to the one form wa.me accepts.
+  function normalizeSaudiPhone(raw) {
+    var digits = String(raw || '').replace(/[^0-9]/g, '');
+    if (digits.indexOf('00') === 0) digits = digits.slice(2);
+    if (digits.indexOf('966') === 0) return digits;
+    if (digits.indexOf('0') === 0) return '966' + digits.slice(1);
+    if (digits.length === 9) return '966' + digits;
+    return digits;
+  }
+
   // OPENED means the reviewer has loaded the page but decided
   // nothing yet; IN PROGRESS means at least one decision has been made
   // this cycle. We only know "this cycle's" pending baseline from the
@@ -94,29 +115,59 @@
 
   function showResult() {
     document.getElementById('resultCard').hidden = false;
+    document.getElementById('reviewerName').textContent = state.reviewer;
+    document.getElementById('waMasked').textContent = maskPhone(state.whatsapp);
+    document.getElementById('resolvedZone').textContent = state.zone === 'ALL' ? 'All Zones (Doctors)' : state.zone;
+    document.getElementById('resolvedDate').textContent = state.reviewDate;
     document.getElementById('urlBox').textContent = state.managerUrl;
     document.getElementById('expiryLine').textContent = 'Expires: ' + new Date(state.expiresAt).toLocaleString() + ' (exactly 24 hours after Prepare)';
     var waText = encodeURIComponent('HMG Attendance Review — please review: ' + state.managerUrl);
     document.getElementById('whatsappBtn').onclick = function () {
-      window.open('https://wa.me/?text=' + waText, '_blank');
+      window.open('https://wa.me/' + normalizeSaudiPhone(state.whatsapp) + '?text=' + waText, '_blank');
     };
     var tag = document.getElementById('statusTag');
     tag.textContent = 'PREPARED';
     tag.className = 'tag tag-PREPARED';
   }
 
+  // Doctors scope is always "all zones" server-side (matches production's
+  // Routing.gs) - the Zone selector is irrelevant for that type, so it's
+  // disabled rather than sent-but-ignored, to avoid implying it matters.
+  document.getElementById('typeSelect').addEventListener('change', function () {
+    var isDoctors = this.value === 'DOCTORS';
+    document.getElementById('zoneSelect').disabled = isDoctors;
+    document.getElementById('zoneField').style.opacity = isDoctors ? '0.5' : '1';
+  });
+
   document.getElementById('prepareBtn').addEventListener('click', function () {
     var btn = this;
+    var reviewType = document.getElementById('typeSelect').value;
+    var zone = document.getElementById('zoneSelect').value;
+    var reviewDate = document.getElementById('reviewDateInput').value;
+    if (!reviewDate) { setMsg('Review Date is required.'); return; }
+
     btn.disabled = true;
     btn.textContent = 'Preparing…';
     setMsg('');
-    bridgePost('prepareReview', {}).then(function (res) {
+    var payload = { reviewDate: reviewDate, reviewType: reviewType };
+    if (reviewType === 'ZONE') payload.zone = zone;
+    bridgePost('prepareReview', payload).then(function (res) {
       btn.disabled = false;
       btn.textContent = 'Prepare Review';
-      if (!res.ok) { setMsg('Error: ' + res.error); return; }
+      if (!res.ok) {
+        // No sheet write happened on a routing failure (no active route /
+        // ambiguous route) - the error is shown as-is, never guessed past.
+        setMsg('Error: ' + res.error);
+        document.getElementById('resultCard').hidden = true;
+        return;
+      }
       state.token = res.token;
       state.managerUrl = res.managerUrl;
       state.expiresAt = res.expiresAt;
+      state.reviewer = res.reviewer;
+      state.whatsapp = res.whatsapp;
+      state.zone = res.zone;
+      state.reviewDate = res.reviewDate;
       state.baselinePending = null;
       saveState();
       showResult();

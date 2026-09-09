@@ -4,7 +4,7 @@
   var BACKEND = 'https://script.google.com/macros/s/AKfycbxcVYWRoQRe429lHHZsReYvJ3qVmD-EAK2WdWtY51iXxX0YOuW1-FqlAfd-1-AjdSpD/exec';
   var WRITE_BRIDGE_ORIGIN = 'https://hmg-write-bridge-poc.fieldmedicine1.workers.dev';
   var WRITE_BRIDGE = WRITE_BRIDGE_ORIGIN + '/';
-  var BUILD = 'mobile-write-2';
+  var BUILD = 'dynamic-routing-1';
 
   // TEST-only rough timing instrumentation (console only, never shown to
   // the reviewer) - per-request start times keyed by label, logged as
