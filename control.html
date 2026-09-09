@@ -5,23 +5,80 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://script.google.com https://script.googleusercontent.com; style-src 'self'; connect-src https://hmg-write-bridge-poc.fieldmedicine1.workers.dev; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';">
-<title>HMG TEST Control Center (POC)</title>
+<title>HMG Attendance Control Center</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div class="wrap">
-  <div class="brand">HMG TEST CONTROL CENTER — ISOLATED POC</div>
-  <div class="note">Isolated TEST-only launcher — never touches the real HMG production Control Center, deployment, or manager data. Pick a date; every zone (and Doctors) that actually has attendance that day appears automatically, with its reviewer resolved live from Review_Routing. Nothing is hardcoded.</div>
+<div class="wrap analytics-wrap">
+  <div class="brand">HMG ATTENDANCE CONTROL CENTER</div>
 
-  <div class="control-card">
-    <label for="reviewDateInput">Review Date</label><br>
-    <input type="date" id="reviewDateInput" value="2026-09-01">
+  <div class="analytics-section">
+    <div class="section-title">Daily Operations &amp; Review Center</div>
+    <div class="control-card">
+      <label for="reviewDateInput">Review Date</label><br>
+      <input type="date" id="reviewDateInput" value="2026-09-01">
+    </div>
+    <div id="statusMsg" class="meta"></div>
+    <div id="cardsHost"></div>
   </div>
 
-  <div id="statusMsg" class="meta"></div>
-  <div id="cardsHost"></div>
+  <div class="analytics-section">
+    <div class="section-title">Reports</div>
+    <div id="reportsAuthNotice" class="note" hidden>Admin access required to generate reports. Open this page using your Period Analytics / Reports access link to unlock this section.</div>
+    <div id="reportsForm" class="filter-bar" hidden>
+      <div class="filter-field">
+        <label for="reportType">Report Type</label>
+        <select id="reportType">
+          <option value="ATTENDANCE">Attendance Report</option>
+          <option value="EMPLOYEE_HOURS">Employee Hours Report</option>
+        </select>
+      </div>
+      <div class="filter-field" id="reportDateField">
+        <label for="reportDate">Date</label>
+        <input type="date" id="reportDate">
+      </div>
+      <div class="filter-field" id="reportFromField" hidden>
+        <label for="reportFrom">From</label>
+        <input type="date" id="reportFrom">
+      </div>
+      <div class="filter-field" id="reportToField" hidden>
+        <label for="reportTo">To</label>
+        <input type="date" id="reportTo">
+      </div>
+      <div class="filter-field">
+        <label for="reportCity">City (blank = All Cities)</label>
+        <input type="text" id="reportCity" placeholder="e.g. Riyadh">
+      </div>
+      <div class="filter-field">
+        <label for="reportCityMode">Mode</label>
+        <select id="reportCityMode">
+          <option value="COMBINED">Combined</option>
+          <option value="SEPARATE">Separate</option>
+        </select>
+      </div>
+      <div class="filter-field" id="reportDesignationField" hidden>
+        <label for="reportDesignation">Designation (blank = All)</label>
+        <input type="text" id="reportDesignation" placeholder="e.g. Nurse">
+      </div>
+      <div class="filter-field">
+        <button id="generateReportBtn" class="btn-primary">Generate Report</button>
+      </div>
+    </div>
+    <div id="reportStatusMsg" class="meta"></div>
+    <div id="reportResults"></div>
+  </div>
 
-  <div class="analytics-nav analytics-nav-spaced"><a href="period-analytics.html">Period Analytics &rarr;</a></div>
+  <div class="analytics-section">
+    <div class="section-title">Period Analytics</div>
+    <div class="meta">Manager review performance and attendance period analytics - a separate module of the same system.</div>
+    <div class="analytics-nav analytics-nav-spaced"><a id="periodAnalyticsLink" href="period-analytics.html">Open Period Analytics &rarr;</a></div>
+  </div>
+
+  <div class="analytics-section">
+    <div class="section-title">More Reporting (coming soon)</div>
+    <div class="meta">Period Attendance PDF · Manager Performance PDF · Excel Export - will appear here as additional Report Type options, no navigation change needed.</div>
+  </div>
+
 </div>
 <script src="control.js"></script>
 </body>

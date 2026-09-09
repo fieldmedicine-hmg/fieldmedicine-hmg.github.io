@@ -11,6 +11,18 @@
   // stale localStorage.
   var LAST_DATE_KEY = 'hmgControlLastDate';
 
+  // Same per-person Analytics Admin credential Period Analytics already
+  // uses - unlocks the Reports section here too (one admin concept, one
+  // credential, reused - never a second auth system). Daily Operations/
+  // Review Center above stay exactly as open as they've always been;
+  // ONLY the Reports section is gated by this. Read once from the URL
+  // and stripped immediately (same pattern as period-analytics.js/app.js)
+  // so it never lingers in the visible address bar/history.
+  var ADMIN_TOKEN = new URLSearchParams(location.search).get('adminToken') || '';
+  if (new URLSearchParams(location.search).has('adminToken')) {
+    history.replaceState(null, '', location.pathname);
+  }
+
   function jsonpGet(action, params) {
     return new Promise(function (resolve, reject) {
       var cbName = 'cb_' + Math.random().toString(36).slice(2);
@@ -76,11 +88,17 @@
   function groupLabel(card) {
     return card.reviewType === 'DOCTORS' ? 'DOCTORS' : card.zone.toUpperCase();
   }
-  function scopeLabel(card) {
-    return card.reviewType === 'DOCTORS' ? 'All Zones' : 'Zone Staff';
+  // City is organizational/reporting metadata only (never a routing input) -
+  // Doctors spans every zone, so it shows "All Zones" in the same spot a
+  // Zone card shows its city.
+  function scopeLine(card) {
+    return card.reviewType === 'DOCTORS' ? 'All Zones' : (card.city || '—');
   }
   function countLabel(card) {
-    return card.count + (card.reviewType === 'DOCTORS' ? (card.count === 1 ? ' doctor' : ' doctors') : (card.count === 1 ? ' employee' : ' employees'));
+    return card.count + (card.reviewType === 'DOCTORS' ? (card.count === 1 ? ' Doctor' : ' Doctors') : (card.count === 1 ? ' Employee' : ' Employees'));
+  }
+  function reviewerLabel(card) {
+    return card.reviewType === 'DOCTORS' ? 'Reviewer' : 'Zone Manager';
   }
 
   function reload() {
@@ -107,17 +125,18 @@
   function renderCard(card, reviewDate) {
     var box = el('div', 'control-card');
     box.appendChild(el('div', 'group-title', groupLabel(card)));
-    box.appendChild(el('div', 'meta', scopeLabel(card) + ' · ' + countLabel(card)));
+    box.appendChild(el('div', 'meta', scopeLine(card)));
+    box.appendChild(el('div', 'meta', countLabel(card)));
 
     if (card.routingError) {
-      box.appendChild(el('div', 'meta', 'Reviewer: —'));
+      box.appendChild(el('div', 'meta', reviewerLabel(card) + ': —'));
       var errLine = el('div', 'routing-error', card.routingError.indexOf('ambiguity') !== -1 ? 'Routing ambiguity' : 'Reviewer not configured');
       box.appendChild(errLine);
       return box;
     }
 
-    box.appendChild(el('div', 'meta', 'Reviewer: ' + card.reviewer));
-    if (card.whatsapp) box.appendChild(el('div', 'meta', 'WhatsApp: ' + maskPhone(card.whatsapp)));
+    box.appendChild(el('div', 'meta', reviewerLabel(card) + ': ' + card.reviewer));
+    if (card.whatsapp) box.appendChild(el('div', 'meta', maskPhone(card.whatsapp)));
 
     var statusLine = el('div', 'status-line');
     var tag = el('span', 'tag tag-' + (card.status === 'NONE' ? 'PENDING' : card.status), card.status === 'NONE' ? 'NOT SENT' : card.status.replace('_', ' '));
@@ -185,4 +204,110 @@
     if (savedDate) document.getElementById('reviewDateInput').value = savedDate;
   } catch (e) { /* ignore */ }
   reload();
+
+  // ================== REPORTS (generateV5Report bridge) ==================
+  // Calls the EXISTING production V5 report generators verbatim, through
+  // the same POST-only Worker bridge every mutation already uses - never
+  // GET/JSONP (report generation creates a real Drive file, a side
+  // effect). The Worker forwards this one action to a DIFFERENT backend
+  // (production's own Apps Script, not this isolated project's) and never
+  // attaches its own shared secret to it - production's authorization is
+  // entirely the Analytics Admin token above, checked server-side there.
+  (function initReports() {
+    var authNotice = document.getElementById('reportsAuthNotice');
+    var form = document.getElementById('reportsForm');
+    if (!ADMIN_TOKEN) { authNotice.hidden = false; return; }
+    form.hidden = false;
+
+    // Also carries the admin token into the Period Analytics link, so
+    // moving between the two modules of the same system never requires
+    // re-entering/re-pasting it.
+    var paLink = document.getElementById('periodAnalyticsLink');
+    paLink.href = 'period-analytics.html?adminToken=' + encodeURIComponent(ADMIN_TOKEN);
+
+    var typeSel = document.getElementById('reportType');
+    var dateField = document.getElementById('reportDateField');
+    var fromField = document.getElementById('reportFromField');
+    var toField = document.getElementById('reportToField');
+    var designationField = document.getElementById('reportDesignationField');
+    var cityInput = document.getElementById('reportCity');
+    var designationInput = document.getElementById('reportDesignation');
+
+    function onTypeChange() {
+      var isAttendance = typeSel.value === 'ATTENDANCE';
+      dateField.hidden = !isAttendance;
+      fromField.hidden = isAttendance;
+      toField.hidden = isAttendance;
+      designationField.hidden = isAttendance;
+    }
+    typeSel.addEventListener('change', onTypeChange);
+    onTypeChange();
+
+    function setReportMsg(text) { document.getElementById('reportStatusMsg').textContent = text || ''; }
+
+    function renderReportResults(files) {
+      var host = document.getElementById('reportResults');
+      host.innerHTML = '';
+      if (!files || !files.length) { host.appendChild(el('div', 'meta', 'No files were generated.')); return; }
+      files.forEach(function (f) {
+        var box = el('div', 'control-card');
+        box.appendChild(el('div', 'meta', (f.city || '') + (f.date ? ' · ' + f.date : '') + (f.period ? ' · ' + f.period : '')));
+        if (f.pdfUrl) {
+          var pdfLink = document.createElement('a');
+          pdfLink.href = f.pdfUrl; pdfLink.target = '_blank'; pdfLink.rel = 'noopener'; pdfLink.textContent = 'Open PDF';
+          box.appendChild(pdfLink);
+        }
+        if (f.url) {
+          box.appendChild(document.createTextNode(' '));
+          var driveLink = document.createElement('a');
+          driveLink.href = f.url; driveLink.target = '_blank'; driveLink.rel = 'noopener'; driveLink.textContent = 'Open in Drive';
+          box.appendChild(driveLink);
+        }
+        host.appendChild(box);
+      });
+    }
+
+    function generateReport() {
+      var btn = document.getElementById('generateReportBtn');
+      btn.disabled = true;
+      btn.textContent = 'Generating…';
+      setReportMsg('Generating report - this can take a little while for a full-month or multi-city run…');
+      document.getElementById('reportResults').innerHTML = '';
+
+      var payload = {
+        reportBridgeToken: ADMIN_TOKEN,
+        reportType: typeSel.value,
+        city: cityInput.value.trim() || 'ALL_CITIES',
+        cityMode: document.getElementById('reportCityMode').value,
+      };
+      if (typeSel.value === 'ATTENDANCE') {
+        payload.dateStr = document.getElementById('reportDate').value;
+      } else {
+        payload.fromStr = document.getElementById('reportFrom').value;
+        payload.toStr = document.getElementById('reportTo').value;
+        if (designationInput.value.trim()) payload.designation = designationInput.value.trim();
+      }
+
+      bridgePost('generateV5Report', payload).then(function (res) {
+        btn.disabled = false;
+        btn.textContent = 'Generate Report';
+        if (!res.ok) { setReportMsg('Error: ' + res.error); return; }
+        setReportMsg('Done.');
+        renderReportResults(res.files);
+      }).catch(function (e) {
+        btn.disabled = false;
+        btn.textContent = 'Generate Report';
+        setReportMsg('Network error: ' + e.message);
+      });
+    }
+    document.getElementById('generateReportBtn').addEventListener('click', generateReport);
+
+    // City/Designation are free-text (not a live dropdown) - this
+    // isolated project has no access to production's real configured-
+    // city/designation list without another new bridge beyond this
+    // phase's approved scope, so the backend's own strict server-side
+    // check (against listConfiguredCities_()/listDistinctDesignations_())
+    // is the actual validation; a typo just returns a clear "Unknown
+    // city/designation" error rather than silently guessing.
+  })();
 })();
