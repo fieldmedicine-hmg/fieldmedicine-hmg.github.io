@@ -4,11 +4,23 @@
   var BACKEND = 'https://script.google.com/macros/s/AKfycbxcVYWRoQRe429lHHZsReYvJ3qVmD-EAK2WdWtY51iXxX0YOuW1-FqlAfd-1-AjdSpD/exec';
   var WRITE_BRIDGE = 'https://hmg-write-bridge-poc.fieldmedicine1.workers.dev/';
 
-  // Kept only in this page's own memory - never persisted, never shown to
-  // the reviewer. The reviewer only ever receives the plain manager URL
-  // (which already carries the token as its one query param), exactly as
-  // the real product's WhatsApp link works.
-  var state = { token: null, managerUrl: null, expiresAt: null };
+  // Kept in this page's own localStorage - never sent anywhere except
+  // back to this same backend, never shown to the reviewer (the reviewer
+  // only ever receives the plain manager URL, exactly as the real
+  // product's WhatsApp link works). Persisted (not just in-memory) so
+  // reloading this Control Center page can still check status without
+  // minting a new assignment - see requirement "refresh status without
+  // recreating the assignment".
+  var STORAGE_KEY = 'hmgControlState';
+  var state = { token: null, managerUrl: null, expiresAt: null, baselinePending: null };
+  try {
+    var saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+    if (saved && saved.token) state = saved;
+  } catch (e) { /* private browsing or corrupted value - start fresh */ }
+
+  function saveState() {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) { /* ignore */ }
+  }
 
   function jsonpGet(action, params) {
     return new Promise(function (resolve, reject) {
@@ -69,7 +81,7 @@
     if (data.completed) return 'COMPLETED';
     if (!data.lastAccessed) return 'PREPARED';
     var pendingCount = (data.rows || []).filter(function (r) { return r.decision === 'PENDING'; }).length;
-    if (state.baselinePending === undefined || state.baselinePending === null) state.baselinePending = pendingCount;
+    if (state.baselinePending === undefined || state.baselinePending === null) { state.baselinePending = pendingCount; saveState(); }
     return pendingCount < state.baselinePending ? 'IN_PROGRESS' : 'OPENED';
   }
 
@@ -106,6 +118,7 @@
       state.managerUrl = res.managerUrl;
       state.expiresAt = res.expiresAt;
       state.baselinePending = null;
+      saveState();
       showResult();
     }).catch(function (e) {
       btn.disabled = false;
@@ -130,4 +143,13 @@
       setMsg('Network error: ' + e.message);
     });
   });
+
+  // Restore a previously-prepared assignment on reload, so the preparer
+  // can come back and check status without minting a fresh token.
+  if (state.token) {
+    showResult();
+    checkStatus(state.token).then(function (data) {
+      if (data && data.ok) renderStatus(data);
+    }).catch(function () { /* leave the PREPARED default shown */ });
+  }
 })();
