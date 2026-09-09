@@ -210,20 +210,23 @@
   // the same POST-only Worker bridge every mutation already uses - never
   // GET/JSONP (report generation creates a real Drive file, a side
   // effect). The Worker forwards this one action to a DIFFERENT backend
-  // (production's own Apps Script, not this isolated project's) and never
-  // attaches its own shared secret to it - production's authorization is
-  // entirely the Analytics Admin token above, checked server-side there.
+  // (production's own Apps Script, not this isolated project's).
+  //
+  // ACCESS (2026-09-09): open to anyone with this page's URL, same as
+  // Daily Operations/Review Center above - a deliberate access
+  // simplification, not an oversight. No Analytics Admin token is
+  // required or sent any more; production's own generateV5Report no
+  // longer checks one. Period Analytics stays separately gated below -
+  // its admin-token model is untouched.
   (function initReports() {
-    var authNotice = document.getElementById('reportsAuthNotice');
-    var form = document.getElementById('reportsForm');
-    if (!ADMIN_TOKEN) { authNotice.hidden = false; return; }
-    form.hidden = false;
+    document.getElementById('reportsForm').hidden = false;
 
-    // Also carries the admin token into the Period Analytics link, so
-    // moving between the two modules of the same system never requires
-    // re-entering/re-pasting it.
-    var paLink = document.getElementById('periodAnalyticsLink');
-    paLink.href = 'period-analytics.html?adminToken=' + encodeURIComponent(ADMIN_TOKEN);
+    // Admin token (if present in the URL) still only unlocks the Period
+    // Analytics link - that module's own security model is unchanged.
+    // Report generation itself no longer needs or uses it.
+    if (ADMIN_TOKEN) {
+      document.getElementById('periodAnalyticsLink').href = 'period-analytics.html?adminToken=' + encodeURIComponent(ADMIN_TOKEN);
+    }
 
     var typeSel = document.getElementById('reportType');
     var dateField = document.getElementById('reportDateField');
@@ -344,7 +347,6 @@
       }, 400);
 
       var payload = {
-        reportBridgeToken: ADMIN_TOKEN,
         reportType: typeSel.value,
         city: cityInput.value.trim() || 'ALL_CITIES',
         cityMode: document.getElementById('reportCityMode').value,
