@@ -205,6 +205,129 @@
   } catch (e) { /* ignore */ }
   reload();
 
+  // ================== DATA SYNC (refreshRawData bridge) ==================
+  // Reuses the EXISTING buildDailyAttendance refresh logic verbatim
+  // (same call ccRefreshRawData already makes server-side) - this page
+  // adds no second ingestion path, and All_Submissions itself is fed
+  // directly by Jotform's own Sheets integration outside this project,
+  // so there is nothing here to "fetch" beyond re-reading what's
+  // already arrived and rebuilding Daily_Attendance from it. Open to
+  // anyone with this page's URL, same as Daily Operations/Reports.
+  (function initDataSync() {
+    var statusLine = document.getElementById('dataSyncStatusLine');
+    var resultHost = document.getElementById('dataSyncResult');
+    var btn = document.getElementById('refreshDataBtn');
+
+    function formatStatusLine(rawRowCount, lastRefreshAt) {
+      var parts = ['Current raw row count: ' + rawRowCount.toLocaleString()];
+      parts.push(lastRefreshAt
+        ? 'Last successful refresh: ' + new Date(lastRefreshAt).toLocaleString()
+        : 'Last successful refresh: never');
+      return parts.join(' · ');
+    }
+
+    function loadStatus() {
+      bridgePost('getDataSyncStatus', {}).then(function (res) {
+        if (!res.ok) { statusLine.textContent = 'Status unavailable: ' + res.error; return; }
+        statusLine.textContent = formatStatusLine(res.rawRowCount, res.lastRefreshAt);
+      }).catch(function () {
+        statusLine.textContent = 'Status unavailable (network error).';
+      });
+    }
+    loadStatus();
+
+    // Typical observed duration for a full refresh - a client-side
+    // ESTIMATE only (see the same disclaimer pattern used for report
+    // generation below); the backend has no granular progress signal
+    // to report mid-request.
+    var DATA_SYNC_ESTIMATED_SECONDS = 75;
+    var DATA_SYNC_STAGES = ['Connecting to source', 'Fetching latest submissions', 'Updating raw data', 'Validating records', 'Finalizing'];
+    function stageForSyncProgress(pct) {
+      if (pct < 15) return DATA_SYNC_STAGES[0];
+      if (pct < 55) return DATA_SYNC_STAGES[1];
+      if (pct < 80) return DATA_SYNC_STAGES[2];
+      if (pct < 94) return DATA_SYNC_STAGES[3];
+      return DATA_SYNC_STAGES[4];
+    }
+    function estimatedSyncProgressPct(elapsedMs, estimatedMs) {
+      var ratio = elapsedMs / estimatedMs;
+      return Math.min(96, (1 - Math.exp(-1.1 * ratio)) * 96);
+    }
+
+    function refreshData() {
+      btn.disabled = true;
+      btn.textContent = 'Refreshing…';
+
+      var startTime = Date.now();
+      resultHost.innerHTML = '';
+      var panel = el('div', 'control-card');
+      var title = el('div', 'group-title', 'Refreshing attendance data');
+      var barOuter = el('div', 'progress-bar-outer');
+      var barInner = el('div', 'progress-bar-inner');
+      barOuter.appendChild(barInner);
+      var pctText = el('div', 'progress-pct', '0%');
+      var stageText = el('div', 'meta', 'Current stage: ' + DATA_SYNC_STAGES[0]);
+      var timeText = el('div', 'meta', 'Elapsed: 0 sec');
+      var note = el('div', 'meta progress-estimate-note', 'Percentage and time remaining are estimates based on typical refresh durations, not exact backend progress.');
+      panel.appendChild(title); panel.appendChild(barOuter); panel.appendChild(pctText);
+      panel.appendChild(stageText); panel.appendChild(timeText); panel.appendChild(note);
+      resultHost.appendChild(panel);
+
+      var tickHandle = setInterval(function () {
+        var elapsedMs = Date.now() - startTime;
+        var pct = estimatedSyncProgressPct(elapsedMs, DATA_SYNC_ESTIMATED_SECONDS * 1000);
+        barInner.style.width = pct.toFixed(0) + '%';
+        pctText.textContent = pct.toFixed(0) + '%';
+        stageText.textContent = 'Current stage: ' + stageForSyncProgress(pct);
+        var elapsedSec = Math.round(elapsedMs / 1000);
+        var remainingMs = DATA_SYNC_ESTIMATED_SECONDS * 1000 - elapsedMs;
+        timeText.textContent = 'Elapsed: ' + elapsedSec + ' sec' +
+          (remainingMs > 1500 ? ' · Estimated remaining: ~' + Math.round(remainingMs / 1000) + ' sec' : ' · finishing up…');
+      }, 400);
+
+      var reviewDate = document.getElementById('reviewDateInput').value;
+      bridgePost('refreshRawData', { dateStr: reviewDate }).then(function (res) {
+        clearInterval(tickHandle);
+        btn.disabled = false;
+        btn.textContent = 'Refresh Data';
+        var elapsedSec = Math.round((Date.now() - startTime) / 1000);
+
+        if (!res.ok) {
+          // A real, confirmed backend response - genuinely did not
+          // succeed, so a definitive failure message is accurate here.
+          resultHost.innerHTML = '';
+          resultHost.appendChild(el('div', 'meta report-error', 'Data was not updated. Please try again.'));
+          resultHost.appendChild(el('div', 'meta progress-estimate-note', String(res.error || '')));
+          return;
+        }
+
+        resultHost.innerHTML = '';
+        var doneBox = el('div', 'control-card');
+        doneBox.appendChild(el('div', 'group-title', 'Data refreshed successfully ✓'));
+        if (res.newRows !== null && res.newRows !== undefined) {
+          doneBox.appendChild(el('div', 'meta', 'New records: ' + res.newRows.toLocaleString()));
+        }
+        doneBox.appendChild(el('div', 'meta', 'Current total rows: ' + res.rawRowCount.toLocaleString()));
+        doneBox.appendChild(el('div', 'meta', 'Completed in ' + elapsedSec + ' sec'));
+        doneBox.appendChild(el('div', 'meta', 'Last updated: ' + new Date(res.refreshedAt).toLocaleString()));
+        resultHost.appendChild(doneBox);
+        statusLine.textContent = formatStatusLine(res.rawRowCount, res.refreshedAt);
+      }).catch(function () {
+        clearInterval(tickHandle);
+        btn.disabled = false;
+        btn.textContent = 'Refresh Data';
+        // A network-level failure (e.g. the Worker/browser relay timing
+        // out) is NOT proof the backend failed - never claim "not
+        // updated" here (that asserts a fact we don't actually know),
+        // and never claim success either. Never auto-retry.
+        resultHost.innerHTML = '';
+        resultHost.appendChild(el('div', 'meta report-slow-notice',
+          'Could not confirm the refresh completed. Check the status above, or try again shortly.'));
+      });
+    }
+    btn.addEventListener('click', refreshData);
+  })();
+
   // ================== REPORTS (generateV5Report bridge) ==================
   // Calls the EXISTING production V5 report generators verbatim, through
   // the same POST-only Worker bridge every mutation already uses - never
