@@ -208,7 +208,6 @@
     var fromDate = document.getElementById('fromDate').value;
     var toDate = document.getElementById('toDate').value;
     if (!fromDate || !toDate) { setMsg('Pick both a From and To date.'); return; }
-    setMsg('Loading…');
     document.getElementById('resultsHost').hidden = true;
     document.getElementById('loadBtn').disabled = true;
 
@@ -225,7 +224,21 @@
     };
     Object.keys(payload).forEach(function (k) { if (payload[k] === '' || payload[k] === undefined) delete payload[k]; });
 
-    bridgePost('periodAnalytics', payload).then(function (data) {
+    // Automatic sheet freshness (2026-09-10): rebuilds ONLY whichever
+    // dates in this range are actually stale (same deterministic signal
+    // Data Sync/Daily Operations already use) BEFORE reading analytics,
+    // so this page's own numbers - and the Period Report's, which reuses
+    // this same call - never reflect stale attendance data. A range
+    // that's already current pays only the cost of the check itself.
+    setMsg('Checking latest data…');
+    bridgePost('ensureDateRangeFresh', { fromStr: fromDate, toStr: toDate }).then(function (freshRes) {
+      if (freshRes.ok && freshRes.staleDatesFound > 0) {
+        setMsg('Updated attendance data for ' + freshRes.staleDatesFound + ' date(s) - loading analytics…');
+      } else {
+        setMsg('Loading…');
+      }
+      return bridgePost('periodAnalytics', payload);
+    }).then(function (data) {
       document.getElementById('loadBtn').disabled = false;
       if (!data.ok) { setMsg('Error: ' + data.error); return; }
       setMsg('');

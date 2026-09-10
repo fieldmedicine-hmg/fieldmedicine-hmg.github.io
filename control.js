@@ -122,34 +122,68 @@
   // number, and only the LATEST one is allowed to touch the DOM.
   var reloadGeneration = 0;
 
+  // Automatic sheet freshness (2026-09-10): before discovering review
+  // groups for the selected date, check whether Daily_Attendance for
+  // THAT SPECIFIC date is current relative to All_Submissions (and any
+  // Area->Zone mapping fix) - reusing the SAME deterministic signal
+  // Data Sync's own status check already uses, never a weak global
+  // row-count guess. Only THAT one date is ever rebuilt, and only when
+  // actually stale - a current date never pays this cost.
   function reload() {
     var reviewDate = document.getElementById('reviewDateInput').value;
     if (!reviewDate) return;
     try { localStorage.setItem(LAST_DATE_KEY, reviewDate); } catch (e) { /* ignore */ }
     var myGeneration = ++reloadGeneration;
-    setMsg('Loading…');
     var host = document.getElementById('cardsHost');
     while (host.firstChild) host.removeChild(host.firstChild);
+    var dateInput = document.getElementById('reviewDateInput');
+    dateInput.disabled = true; // debounce - one in-flight check/rebuild/discover cycle at a time
+    setMsg('Checking latest data…');
 
-    jsonpGet('discoverGroups', { reviewDate: reviewDate }, function () {
-      if (myGeneration !== reloadGeneration) return;
-      setMsg('Still loading… this can take longer during busier periods.');
-    }).then(function (data) {
-      if (myGeneration !== reloadGeneration) return; // a newer date/reload has since superseded this response
-      if (!data.ok) { setMsg('Error: ' + data.error); return; }
-      if (!data.cards.length) {
-        // Empty could mean "genuinely no attendance" OR "Daily_Attendance
-        // hasn't been rebuilt for this date yet" - these are NOT the same
-        // thing, and showing the same message for both is exactly what
-        // was confusing about the earlier bug. checkDailyAttendanceBuilt
-        // reuses the same lastBuiltForDate_ logic the native Control
-        // Center already relies on - never a guess.
-        setMsg('');
-        checkDailyAttendanceBuilt(reviewDate, myGeneration);
-        return;
-      }
-      setMsg('');
-      data.cards.forEach(function (card) { host.appendChild(renderCard(card, reviewDate)); });
+    function finish() { if (myGeneration === reloadGeneration) dateInput.disabled = false; }
+
+    bridgePost('getDailyAttendanceStatus', { dateStr: reviewDate }).then(function (statusRes) {
+      if (myGeneration !== reloadGeneration) return null;
+      if (!statusRes.ok) { setMsg('Error: ' + statusRes.error); finish(); return null; }
+      if (!statusRes.stale) return true; // already current - skip straight to discovery, stays fast
+
+      setMsg('Updating attendance data… (0 sec)');
+      var startTime = Date.now();
+      var tickHandle = setInterval(function () {
+        if (myGeneration !== reloadGeneration) { clearInterval(tickHandle); return; }
+        setMsg('Updating attendance data… (' + Math.round((Date.now() - startTime) / 1000) + ' sec)');
+      }, 1000);
+      return bridgePost('ensureDateRangeFresh', { fromStr: reviewDate, toStr: reviewDate }).then(function (freshRes) {
+        clearInterval(tickHandle);
+        if (myGeneration !== reloadGeneration) return null;
+        if (!freshRes.ok || freshRes.anyFailed) {
+          setMsg('Could not update attendance data for this date. ' + (freshRes.error || 'Please try again.'));
+          finish();
+          return null;
+        }
+        return true;
+      });
+    }).then(function (proceed) {
+      if (proceed === null || myGeneration !== reloadGeneration) return;
+      setMsg('Loading review groups…');
+      return jsonpGet('discoverGroups', { reviewDate: reviewDate }, function () {
+        if (myGeneration !== reloadGeneration) return;
+        setMsg('Still loading… this can take longer during busier periods.');
+      }).then(function (data) {
+        if (myGeneration !== reloadGeneration) return;
+        if (!data.ok) { setMsg('Error: ' + data.error); return; }
+        if (!data.cards.length) {
+          // Reached only after confirming freshness above, so an empty
+          // result here is genuinely zero, not stale data - still double-
+          // checked via checkDailyAttendanceBuilt rather than assumed.
+          setMsg('');
+          checkDailyAttendanceBuilt(reviewDate, myGeneration);
+          return;
+        }
+        setMsg('Ready');
+        data.cards.forEach(function (card) { host.appendChild(renderCard(card, reviewDate)); });
+        setTimeout(function () { if (myGeneration === reloadGeneration) setMsg(''); }, 800);
+      });
     }).catch(function (e) {
       if (myGeneration !== reloadGeneration) return;
       // A timeout is NOT proof the backend failed - every measured real
@@ -159,7 +193,7 @@
       setMsg(e.message === 'Request timed out'
         ? 'This is taking longer than usual. The data may still be loading - please try this date again in a moment.'
         : 'Network error: ' + e.message);
-    });
+    }).then(finish, finish);
   }
 
   function checkDailyAttendanceBuilt(reviewDate, myGeneration) {
