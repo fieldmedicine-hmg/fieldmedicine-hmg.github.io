@@ -23,16 +23,30 @@
     history.replaceState(null, '', location.pathname);
   }
 
-  function jsonpGet(action, params) {
+  // 2026-09-10 production bug fix: this backend's own real response time
+  // (measured directly, repeatedly, against production) varies roughly
+  // 4-12+ seconds under real conditions - the previous 15000ms ceiling
+  // left too little margin and produced real "Request timed out" errors
+  // for requests that would have succeeded given a few more seconds.
+  // 30000ms is a measured, action-specific choice (this is the only
+  // jsonpGet caller in this file), not a blanket increase. `onSlow`
+  // (optional) fires once, part-way through the wait, so the UI can say
+  // it's still working rather than sitting on "Loading…" indefinitely.
+  var JSONP_TIMEOUT_MS = 30000;
+  var JSONP_SLOW_NOTICE_MS = 8000;
+
+  function jsonpGet(action, params, onSlow) {
     return new Promise(function (resolve, reject) {
       var cbName = 'cb_' + Math.random().toString(36).slice(2);
       var settled = false;
       var timeoutId = setTimeout(function () {
         if (settled) return;
         settled = true; cleanup(); reject(new Error('Request timed out'));
-      }, 15000);
+      }, JSONP_TIMEOUT_MS);
+      var slowId = onSlow ? setTimeout(function () { if (!settled) onSlow(); }, JSONP_SLOW_NOTICE_MS) : null;
       function cleanup() {
         clearTimeout(timeoutId);
+        if (slowId) clearTimeout(slowId);
         delete window[cbName];
         if (scriptEl.parentNode) scriptEl.parentNode.removeChild(scriptEl);
       }
@@ -101,24 +115,67 @@
     return card.reviewType === 'DOCTORS' ? 'Reviewer' : 'Zone Manager';
   }
 
+  // Race-guard (2026-09-10 bug fix): changing the Review Date quickly
+  // (or reloading while a slow request is still in flight) must never
+  // let an OLDER, slower response overwrite the UI for whatever date is
+  // now actually selected - each reload() call gets its own generation
+  // number, and only the LATEST one is allowed to touch the DOM.
+  var reloadGeneration = 0;
+
   function reload() {
     var reviewDate = document.getElementById('reviewDateInput').value;
     if (!reviewDate) return;
     try { localStorage.setItem(LAST_DATE_KEY, reviewDate); } catch (e) { /* ignore */ }
+    var myGeneration = ++reloadGeneration;
     setMsg('Loading…');
     var host = document.getElementById('cardsHost');
     while (host.firstChild) host.removeChild(host.firstChild);
 
-    jsonpGet('discoverGroups', { reviewDate: reviewDate }).then(function (data) {
+    jsonpGet('discoverGroups', { reviewDate: reviewDate }, function () {
+      if (myGeneration !== reloadGeneration) return;
+      setMsg('Still loading… this can take longer during busier periods.');
+    }).then(function (data) {
+      if (myGeneration !== reloadGeneration) return; // a newer date/reload has since superseded this response
       if (!data.ok) { setMsg('Error: ' + data.error); return; }
-      setMsg('');
       if (!data.cards.length) {
-        host.appendChild(el('div', 'meta', 'No attendance found for this date.'));
+        // Empty could mean "genuinely no attendance" OR "Daily_Attendance
+        // hasn't been rebuilt for this date yet" - these are NOT the same
+        // thing, and showing the same message for both is exactly what
+        // was confusing about the earlier bug. checkDailyAttendanceBuilt
+        // reuses the same lastBuiltForDate_ logic the native Control
+        // Center already relies on - never a guess.
+        setMsg('');
+        checkDailyAttendanceBuilt(reviewDate, myGeneration);
         return;
       }
+      setMsg('');
       data.cards.forEach(function (card) { host.appendChild(renderCard(card, reviewDate)); });
     }).catch(function (e) {
-      setMsg('Network error: ' + e.message);
+      if (myGeneration !== reloadGeneration) return;
+      // A timeout is NOT proof the backend failed - every measured real
+      // call this bridge makes eventually succeeds, just sometimes slower
+      // than the wait allows. Never shown as "No attendance found" (that
+      // would be a false zero) and never auto-retried.
+      setMsg(e.message === 'Request timed out'
+        ? 'This is taking longer than usual. The data may still be loading - please try this date again in a moment.'
+        : 'Network error: ' + e.message);
+    });
+  }
+
+  function checkDailyAttendanceBuilt(reviewDate, myGeneration) {
+    var host = document.getElementById('cardsHost');
+    bridgePost('getDailyAttendanceStatus', { dateStr: reviewDate }).then(function (res) {
+      if (myGeneration !== reloadGeneration) return;
+      if (res.ok && !res.built) {
+        host.appendChild(el('div', 'meta', 'This date has not been processed yet. Use "Refresh Data" above for this date, then reload.'));
+      } else {
+        host.appendChild(el('div', 'meta', 'No attendance found for this date.'));
+      }
+    }).catch(function () {
+      if (myGeneration !== reloadGeneration) return;
+      // Status check itself failed - fall back to the plain, already-
+      // accurate statement rather than blocking on a second failure.
+      host.appendChild(el('div', 'meta', 'No attendance found for this date.'));
     });
   }
 
