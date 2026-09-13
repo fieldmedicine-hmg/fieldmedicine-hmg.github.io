@@ -11,27 +11,22 @@
   // stale localStorage.
   var LAST_DATE_KEY = 'hmgControlLastDate';
 
-  // Same per-person Analytics Admin credential Period Analytics already
-  // uses - this page never validates it itself, only forwards it into
-  // the Period Analytics link below (that page's own server-side check
-  // is the real boundary, unchanged).
+  // PERMANENT per-person Period Analytics credential (the "master key")
+  // - this page never validates it itself, only forwards it into the
+  // Period Analytics link below, for THIS page load only.
   //
-  // 2026-09-13: read once from the URL and stripped immediately (same
-  // pattern as before), but ALSO cached in sessionStorage under a key
-  // shared with period-analytics.js - so an operator who has opened
-  // Period Analytics with a valid link once in this browser tab gets a
-  // working "Open Period Analytics" link on every later Control Center
-  // load in the SAME tab/session, without re-pasting a token URL each
-  // time. sessionStorage (never localStorage): cleared when the tab
-  // closes, so a lost/shared device never carries this indefinitely.
-  var ADMIN_TOKEN_STORAGE_KEY_ = 'hmgAnalyticsAdminToken';
+  // 2026-09-13 (device-credential redesign): NEVER persisted here, not
+  // even in sessionStorage - the permanent admin token must not live in
+  // the browser any longer than a single page load. The normal day-to-
+  // day mechanism is now the independently-revocable DEVICE credential
+  // that period-analytics.js itself manages in its own localStorage
+  // (established once via a one-time enrollment link, see
+  // AnalyticsDeviceAuth.gs). Once a device is enrolled there, the plain
+  // "Open Period Analytics" link below (no token in the URL at all)
+  // already works, since that page reads its own stored device token.
   var ADMIN_TOKEN = new URLSearchParams(location.search).get('adminToken') || '';
   if (new URLSearchParams(location.search).has('adminToken')) {
     history.replaceState(null, '', location.pathname);
-    try { sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY_, ADMIN_TOKEN); } catch (e) { /* private mode etc. - falls back to URL-only, same as before */ }
-  }
-  if (!ADMIN_TOKEN) {
-    try { ADMIN_TOKEN = sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY_) || ''; } catch (e) { /* ignore */ }
   }
 
   // 2026-09-10 production bug fix: this backend's own real response time

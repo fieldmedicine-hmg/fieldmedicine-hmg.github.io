@@ -14,6 +14,13 @@
   <div class="note">Management reporting - reads the same live, authoritative attendance and review data as the rest of the Control Center. Read-only; no WhatsApp is ever sent from this page.</div>
   <div class="analytics-nav"><a href="control.html">&larr; Back to Control Center</a></div>
 
+  <div class="analytics-section" id="deviceEnrollSection" hidden>
+    <div class="section-title">Enroll a Device</div>
+    <div class="meta">Generate a one-time link to give this browser - or your employee's - normal Period Analytics access with no manual token afterward. Single-use, expires in 1 hour.</div>
+    <button id="createInviteBtn" class="btn-secondary">Generate Enrollment Link</button>
+    <div id="inviteResult" class="meta"></div>
+  </div>
+
   <div class="filter-bar" id="filterBar">
     <div class="filter-field">
       <label for="fromDate">From Date</label>

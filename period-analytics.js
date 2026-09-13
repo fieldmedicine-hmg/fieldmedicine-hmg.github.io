@@ -16,35 +16,53 @@
     }).then(function (r) { return r.json(); });
   }
 
-  // REAL per-person Period Analytics credential (2026-09-09) - a
-  // completely separate value from a manager's review token or the
-  // Worker's own shared secret; this page never sees either of those.
-  // Read once from the URL, then stripped from the visible address bar/
-  // history immediately (same pattern app.js already uses for the
-  // reviewer token) so it never lingers in a screenshot, browser history,
-  // or a copy-pasted URL's visible query string.
-  //
-  // 2026-09-13: this is an internal operator page (owner + one employee),
-  // opened repeatedly all day - requiring a fresh token URL on every
-  // single reload/navigation was real operational friction, not a
-  // meaningful security gain. A token is now cached in sessionStorage
-  // (shared key with control.js) ONLY after the backend has actually
-  // confirmed it valid (a successful Load/PDF/Excel response) - never
-  // blindly on page load - so persistence never outruns real server-side
-  // validation. sessionStorage clears when the tab closes (never
-  // localStorage), so a lost/shared device doesn't carry it indefinitely,
-  // and an invalid/rotated token is dropped the moment the backend says
-  // so (see load()/generatePeriodReport() below).
-  var ADMIN_TOKEN_STORAGE_KEY_ = 'hmgAnalyticsAdminToken';
-  function storeAdminToken_(token) { try { sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY_, token); } catch (e) { /* ignore */ } }
-  function clearStoredAdminToken_() { try { sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY_); } catch (e) { /* ignore */ } }
-
+  // PERMANENT per-person Period Analytics credential (2026-09-09) - the
+  // "master key" from Authorized_Users, a completely separate value from
+  // a manager's review token or the Worker's own shared secret. Read
+  // once from the URL, stripped from the visible address bar/history
+  // immediately, held ONLY in memory - NEVER persisted anywhere. This is
+  // deliberately the one thing this page never caches: it is used
+  // directly to view data (an escape hatch) and to mint a fresh device-
+  // enrollment invite (see initDeviceEnrollment below), never stored.
   var ADMIN_TOKEN = new URLSearchParams(location.search).get('adminToken') || '';
   if (new URLSearchParams(location.search).has('adminToken')) {
     history.replaceState(null, '', location.pathname);
   }
-  if (!ADMIN_TOKEN) {
-    try { ADMIN_TOKEN = sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY_) || ''; } catch (e) { /* ignore */ }
+
+  // DEVICE credential (2026-09-13) - the actual day-to-day mechanism for
+  // this two-person internal tool. Independently revocable, re-validated
+  // against LIVE Authorized_Users state on every single privileged call
+  // (production's validateAnalyticsDevice_) - never a self-contained
+  // token that stays valid on its own regardless of server state, and
+  // never the permanent admin token above. Persisted in localStorage so
+  // it survives closing/reopening the browser: the operator enrolls a
+  // device ONCE via a one-time invite link (below), then Control Center
+  // -> Period Analytics just works from then on, on that device. A
+  // revoked/deactivated operator's device is blocked on its very next
+  // request, whatever is cached here.
+  var DEVICE_TOKEN_STORAGE_KEY_ = 'hmgAnalyticsDeviceToken';
+  function storeDeviceToken_(token) { try { localStorage.setItem(DEVICE_TOKEN_STORAGE_KEY_, token); } catch (e) { /* ignore */ } }
+  function clearDeviceToken_() { try { localStorage.removeItem(DEVICE_TOKEN_STORAGE_KEY_); } catch (e) { /* ignore */ } }
+  var DEVICE_TOKEN = '';
+  try { DEVICE_TOKEN = localStorage.getItem(DEVICE_TOKEN_STORAGE_KEY_) || ''; } catch (e) { /* ignore */ }
+
+  // One-time, single-use enrollment link (?enrollInvite=...) - claimed
+  // immediately below and stripped from the URL; the invite itself is
+  // never reusable and is never what gets stored (see
+  // initDeviceEnrollment).
+  var PENDING_ENROLL_INVITE_ = new URLSearchParams(location.search).get('enrollInvite') || '';
+  if (new URLSearchParams(location.search).has('enrollInvite')) {
+    history.replaceState(null, '', location.pathname);
+  }
+
+  // Which credential (if any) this page load is actually authorized
+  // with - ADMIN_TOKEN (the permanent master key, present only if this
+  // exact load carried it in the URL) takes precedence when both would
+  // otherwise apply, since it is the more explicit, freshest signal.
+  function activeCredential_() {
+    if (ADMIN_TOKEN) return { kind: 'admin', value: ADMIN_TOKEN };
+    if (DEVICE_TOKEN) return { kind: 'device', value: DEVICE_TOKEN };
+    return null;
   }
 
   function el(tag, className, text) {
@@ -216,12 +234,14 @@
 
   function load() {
     // Client-side gate is a UX convenience ONLY - the real authorization
-    // boundary is entirely server-side (Code.gs's
-    // validateAnalyticsAdminToken_, checked before any data is computed
-    // or returned). A forged/blank token here still gets the exact same
+    // boundary is entirely server-side: either validateReportBridgeToken_
+    // (for the admin-token path) or validateAnalyticsDevice_ (for the
+    // device-token path), both checked before any data is computed or
+    // returned. A forged/blank credential here still gets the exact same
     // "Not authorized" response from the backend as if this check didn't
     // exist at all.
-    if (!ADMIN_TOKEN) { setMsg('Access token required - open this page using your Period Analytics access link.'); return; }
+    var cred = activeCredential_();
+    if (!cred) { setMsg('Access required - open this page using your Period Analytics access link, or enroll this device from the Control Center.'); return; }
     var fromDate = document.getElementById('fromDate').value;
     var toDate = document.getElementById('toDate').value;
     if (!fromDate || !toDate) { setMsg('Pick both a From and To date.'); return; }
@@ -229,7 +249,7 @@
     document.getElementById('loadBtn').disabled = true;
 
     var payload = {
-      fromDate: fromDate, toDate: toDate, adminToken: ADMIN_TOKEN,
+      fromDate: fromDate, toDate: toDate,
       includeTest: document.getElementById('includeTest').checked ? 'true' : 'false',
       zone: document.getElementById('zoneFilter').value,
       city: document.getElementById('cityFilter').value,
@@ -239,6 +259,7 @@
       decision: document.getElementById('decisionFilter').value,
       reviewer: document.getElementById('reviewerFilter').value,
     };
+    if (cred.kind === 'admin') payload.adminToken = cred.value; else payload.deviceToken = cred.value;
     Object.keys(payload).forEach(function (k) { if (payload[k] === '' || payload[k] === undefined) delete payload[k]; });
 
     // Automatic sheet freshness (2026-09-10): rebuilds ONLY whichever
@@ -254,15 +275,18 @@
       } else {
         setMsg('Loading…');
       }
-      return bridgePost('periodAnalytics', payload);
+      return bridgePost(cred.kind === 'admin' ? 'periodAnalytics' : 'periodAnalyticsViaDevice', payload);
     }).then(function (data) {
       document.getElementById('loadBtn').disabled = false;
       if (!data.ok) {
         setMsg('Error: ' + data.error);
-        clearStoredAdminToken_();
+        // A device-credential failure (revoked/deactivated/invalid) means
+        // this cached token is no longer good for anything - drop it
+        // rather than silently retrying with it forever. The permanent
+        // admin token is never cleared this way; it isn't stored at all.
+        if (cred.kind === 'device') { clearDeviceToken_(); DEVICE_TOKEN = ''; applyAccessGate_(); }
         return;
       }
-      storeAdminToken_(ADMIN_TOKEN);
       setMsg('');
       lastData = data;
       populateFilterOptions(data);
@@ -330,7 +354,8 @@
     }
 
     function generatePeriodReport(format) {
-      if (!ADMIN_TOKEN) { setPrMsg('Access token required - open this page using your Period Analytics access link.'); return; }
+      var cred = activeCredential_();
+      if (!cred) { setPrMsg('Access required - open this page using your Period Analytics access link, or enroll this device from the Control Center.'); return; }
       var fromStr = document.getElementById('prFromDate').value;
       var toStr = document.getElementById('prToDate').value;
       if (!fromStr || !toStr) { setPrMsg('Pick both a From and To date.'); return; }
@@ -375,12 +400,17 @@
       }, 400);
 
       var payload = {
-        reportBridgeToken: ADMIN_TOKEN, fromStr: fromStr, toStr: toStr,
+        fromStr: fromStr, toStr: toStr,
         city: document.getElementById('prCity').value, zone: document.getElementById('prZone').value,
         reviewType: document.getElementById('prReviewType').value,
       };
+      if (cred.kind === 'admin') payload.reportBridgeToken = cred.value; else payload.deviceToken = cred.value;
 
-      bridgePost(format === 'pdf' ? 'generatePeriodReportPdf' : 'generatePeriodReportExcel', payload).then(function (res) {
+      var action = format === 'pdf'
+        ? (cred.kind === 'admin' ? 'generatePeriodReportPdf' : 'generatePeriodReportPdfViaDevice')
+        : (cred.kind === 'admin' ? 'generatePeriodReportExcel' : 'generatePeriodReportExcelViaDevice');
+
+      bridgePost(action, payload).then(function (res) {
         clearInterval(tickHandle);
         pdfBtn.disabled = false; excelBtn.disabled = false;
         pdfBtn.textContent = 'Generate PDF'; excelBtn.textContent = 'Generate Excel';
@@ -389,10 +419,9 @@
         if (!res.ok) {
           resultHost.innerHTML = '';
           resultHost.appendChild(el('div', 'meta report-error', 'Error: ' + res.error));
-          clearStoredAdminToken_();
+          if (cred.kind === 'device') { clearDeviceToken_(); DEVICE_TOKEN = ''; applyAccessGate_(); }
           return;
         }
-        storeAdminToken_(ADMIN_TOKEN);
 
         resultHost.innerHTML = '';
         var doneBox = el('div', 'control-card');
@@ -435,14 +464,72 @@
     document.getElementById('prGenerateExcelBtn').addEventListener('click', function () { generatePeriodReport('excel'); });
   })();
 
-  // UX-only early notice (see the real check inside load()) - just tells
-  // a visitor with no token why nothing will happen before they even
-  // click Load, and keeps the filter bar visibly present with zero data
-  // ever fetched or shown, satisfying "the URL alone provides zero data".
-  if (!ADMIN_TOKEN) {
-    setMsg('Access token required - open this page using your Period Analytics access link. No data is available without it.');
-    document.getElementById('loadBtn').disabled = true;
-    document.getElementById('prGeneratePdfBtn').disabled = true;
-    document.getElementById('prGenerateExcelBtn').disabled = true;
+  // UX-only gate (see the real checks inside load()/generatePeriodReport())
+  // - reflects whichever credential (if any) this page load actually has,
+  // and shows/hides the "generate an enrollment link" section, which only
+  // makes sense when the permanent admin token (the master key) is
+  // present. Re-run after a device is enrolled or a device credential is
+  // rejected, so the UI never lags the real client-side state.
+  function applyAccessGate_() {
+    var cred = activeCredential_();
+    var hasAccess = !!cred;
+    document.getElementById('loadBtn').disabled = !hasAccess;
+    document.getElementById('prGeneratePdfBtn').disabled = !hasAccess;
+    document.getElementById('prGenerateExcelBtn').disabled = !hasAccess;
+    document.getElementById('deviceEnrollSection').hidden = !(cred && cred.kind === 'admin');
+    if (!hasAccess) {
+      setMsg('Access required - open this page using your Period Analytics access link, or enroll this device from the Control Center. No data is available without it.');
+    }
   }
+
+  // Device enrollment (2026-09-13, Magic Invite Links): an already-
+  // authorized operator (holding the real permanent admin token) mints a
+  // single-use, 1-hour invite here; opening that link ONCE on another
+  // browser/device claims it and stores a distinct, independently
+  // revocable device credential - never the invite token itself, never
+  // the permanent admin token.
+  (function initDeviceEnrollment() {
+    var btn = document.getElementById('createInviteBtn');
+    var resultHost = document.getElementById('inviteResult');
+    btn.addEventListener('click', function () {
+      if (!ADMIN_TOKEN) return;
+      btn.disabled = true;
+      resultHost.textContent = 'Generating…';
+      bridgePost('createAnalyticsInvite', { adminToken: ADMIN_TOKEN }).then(function (res) {
+        btn.disabled = false;
+        if (!res.ok) { resultHost.textContent = 'Error: ' + res.error; return; }
+        var link = location.origin + location.pathname + '?enrollInvite=' + encodeURIComponent(res.inviteToken);
+        resultHost.innerHTML = '';
+        resultHost.appendChild(document.createTextNode('One-time enrollment link (expires ' + new Date(res.expiresAt).toLocaleString() + '):'));
+        resultHost.appendChild(document.createElement('br'));
+        var code = document.createElement('code');
+        code.textContent = link;
+        resultHost.appendChild(code);
+        resultHost.appendChild(document.createElement('br'));
+        resultHost.appendChild(el('span', 'meta', 'Open this link once, on the device you want to enroll (this device or your employee\'s). It cannot be reused, and it expires in 1 hour.'));
+      }).catch(function () { btn.disabled = false; resultHost.textContent = 'Network error generating the enrollment link.'; });
+    });
+  })();
+
+  // Claim a pending ?enrollInvite=... (already stripped from the URL
+  // above) before the access gate is first applied, so a fresh enrollment
+  // takes effect on this very page load rather than requiring a manual
+  // reload.
+  function claimPendingInviteIfAny_() {
+    if (!PENDING_ENROLL_INVITE_) return Promise.resolve();
+    setMsg('Enrolling this device…');
+    return bridgePost('claimAnalyticsInvite', { inviteToken: PENDING_ENROLL_INVITE_, deviceLabel: navigator.userAgent.slice(0, 120) })
+      .then(function (res) {
+        if (!res.ok) { setMsg('Device enrollment failed: ' + res.error); return; }
+        DEVICE_TOKEN = res.deviceToken;
+        storeDeviceToken_(DEVICE_TOKEN);
+        setMsg('Device enrolled - this browser now has Period Analytics access.');
+      })
+      .catch(function () { setMsg('Device enrollment failed: network error. The link is single-use - if it was consumed, ask for a new one.'); });
+  }
+
+  // applyAccessGate_ only overwrites statusMsg when access is absent, so
+  // a just-set "Device enrolled" / "enrollment failed" message from the
+  // claim above survives this call intact.
+  claimPendingInviteIfAny_().then(applyAccessGate_);
 })();
