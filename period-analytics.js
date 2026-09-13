@@ -22,12 +22,29 @@
   // Read once from the URL, then stripped from the visible address bar/
   // history immediately (same pattern app.js already uses for the
   // reviewer token) so it never lingers in a screenshot, browser history,
-  // or a copy-pasted URL's visible query string. Kept only in this
-  // in-memory variable for the rest of the page's life; a reload starts
-  // over and requires the token again - this page has no "remember me".
+  // or a copy-pasted URL's visible query string.
+  //
+  // 2026-09-13: this is an internal operator page (owner + one employee),
+  // opened repeatedly all day - requiring a fresh token URL on every
+  // single reload/navigation was real operational friction, not a
+  // meaningful security gain. A token is now cached in sessionStorage
+  // (shared key with control.js) ONLY after the backend has actually
+  // confirmed it valid (a successful Load/PDF/Excel response) - never
+  // blindly on page load - so persistence never outruns real server-side
+  // validation. sessionStorage clears when the tab closes (never
+  // localStorage), so a lost/shared device doesn't carry it indefinitely,
+  // and an invalid/rotated token is dropped the moment the backend says
+  // so (see load()/generatePeriodReport() below).
+  var ADMIN_TOKEN_STORAGE_KEY_ = 'hmgAnalyticsAdminToken';
+  function storeAdminToken_(token) { try { sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY_, token); } catch (e) { /* ignore */ } }
+  function clearStoredAdminToken_() { try { sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY_); } catch (e) { /* ignore */ } }
+
   var ADMIN_TOKEN = new URLSearchParams(location.search).get('adminToken') || '';
   if (new URLSearchParams(location.search).has('adminToken')) {
     history.replaceState(null, '', location.pathname);
+  }
+  if (!ADMIN_TOKEN) {
+    try { ADMIN_TOKEN = sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY_) || ''; } catch (e) { /* ignore */ }
   }
 
   function el(tag, className, text) {
@@ -240,7 +257,12 @@
       return bridgePost('periodAnalytics', payload);
     }).then(function (data) {
       document.getElementById('loadBtn').disabled = false;
-      if (!data.ok) { setMsg('Error: ' + data.error); return; }
+      if (!data.ok) {
+        setMsg('Error: ' + data.error);
+        clearStoredAdminToken_();
+        return;
+      }
+      storeAdminToken_(ADMIN_TOKEN);
       setMsg('');
       lastData = data;
       populateFilterOptions(data);
@@ -367,8 +389,10 @@
         if (!res.ok) {
           resultHost.innerHTML = '';
           resultHost.appendChild(el('div', 'meta report-error', 'Error: ' + res.error));
+          clearStoredAdminToken_();
           return;
         }
+        storeAdminToken_(ADMIN_TOKEN);
 
         resultHost.innerHTML = '';
         var doneBox = el('div', 'control-card');

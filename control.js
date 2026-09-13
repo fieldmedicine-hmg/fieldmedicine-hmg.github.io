@@ -12,15 +12,26 @@
   var LAST_DATE_KEY = 'hmgControlLastDate';
 
   // Same per-person Analytics Admin credential Period Analytics already
-  // uses - unlocks the Reports section here too (one admin concept, one
-  // credential, reused - never a second auth system). Daily Operations/
-  // Review Center above stay exactly as open as they've always been;
-  // ONLY the Reports section is gated by this. Read once from the URL
-  // and stripped immediately (same pattern as period-analytics.js/app.js)
-  // so it never lingers in the visible address bar/history.
+  // uses - this page never validates it itself, only forwards it into
+  // the Period Analytics link below (that page's own server-side check
+  // is the real boundary, unchanged).
+  //
+  // 2026-09-13: read once from the URL and stripped immediately (same
+  // pattern as before), but ALSO cached in sessionStorage under a key
+  // shared with period-analytics.js - so an operator who has opened
+  // Period Analytics with a valid link once in this browser tab gets a
+  // working "Open Period Analytics" link on every later Control Center
+  // load in the SAME tab/session, without re-pasting a token URL each
+  // time. sessionStorage (never localStorage): cleared when the tab
+  // closes, so a lost/shared device never carries this indefinitely.
+  var ADMIN_TOKEN_STORAGE_KEY_ = 'hmgAnalyticsAdminToken';
   var ADMIN_TOKEN = new URLSearchParams(location.search).get('adminToken') || '';
   if (new URLSearchParams(location.search).has('adminToken')) {
     history.replaceState(null, '', location.pathname);
+    try { sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY_, ADMIN_TOKEN); } catch (e) { /* private mode etc. - falls back to URL-only, same as before */ }
+  }
+  if (!ADMIN_TOKEN) {
+    try { ADMIN_TOKEN = sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY_) || ''; } catch (e) { /* ignore */ }
   }
 
   // 2026-09-10 production bug fix: this backend's own real response time
