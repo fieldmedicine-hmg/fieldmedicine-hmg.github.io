@@ -488,14 +488,34 @@
   // browser/device claims it and stores a distinct, independently
   // revocable device credential - never the invite token itself, never
   // the permanent admin token.
+  // Elapsed-time ticker, shared by invite generation and invite claiming
+  // below - production's own doPost response is served via a 302 to a
+  // GET-only Google echo endpoint whose round-trip time is genuinely
+  // variable (observed anywhere from a few seconds to well over a
+  // minute for the SAME trivial call), and the Worker bridge retries
+  // that hop up to 3 times before giving up. A bare "Generating…" with
+  // no feedback for that whole window reads as hung long before it
+  // actually fails - this ticker is the same honesty the Period Report
+  // PDF/Excel progress bar already gives that identical wait.
+  function startElapsedTicker_(host, label) {
+    var startTime = Date.now();
+    host.textContent = label + ' (elapsed: 0 sec)';
+    var handle = setInterval(function () {
+      var sec = Math.round((Date.now() - startTime) / 1000);
+      host.textContent = label + ' (elapsed: ' + sec + ' sec' + (sec > 12 ? ' - this can take up to a minute or so, still working' : '') + ')';
+    }, 1000);
+    return function stop() { clearInterval(handle); };
+  }
+
   (function initDeviceEnrollment() {
     var btn = document.getElementById('createInviteBtn');
     var resultHost = document.getElementById('inviteResult');
     btn.addEventListener('click', function () {
       if (!ADMIN_TOKEN) return;
       btn.disabled = true;
-      resultHost.textContent = 'Generating…';
+      var stopTicker = startElapsedTicker_(resultHost, 'Generating enrollment link…');
       bridgePost('createAnalyticsInvite', { adminToken: ADMIN_TOKEN }).then(function (res) {
+        stopTicker();
         btn.disabled = false;
         if (!res.ok) { resultHost.textContent = 'Error: ' + res.error; return; }
         var link = location.origin + location.pathname + '?enrollInvite=' + encodeURIComponent(res.inviteToken);
@@ -507,7 +527,7 @@
         resultHost.appendChild(code);
         resultHost.appendChild(document.createElement('br'));
         resultHost.appendChild(el('span', 'meta', 'Open this link once, on the device you want to enroll (this device or your employee\'s). It cannot be reused, and it expires in 1 hour.'));
-      }).catch(function () { btn.disabled = false; resultHost.textContent = 'Network error generating the enrollment link.'; });
+      }).catch(function () { stopTicker(); btn.disabled = false; resultHost.textContent = 'Network error generating the enrollment link.'; });
     });
   })();
 
@@ -517,15 +537,17 @@
   // reload.
   function claimPendingInviteIfAny_() {
     if (!PENDING_ENROLL_INVITE_) return Promise.resolve();
-    setMsg('Enrolling this device…');
+    var statusEl = document.getElementById('statusMsg');
+    var stopTicker = startElapsedTicker_(statusEl, 'Enrolling this device…');
     return bridgePost('claimAnalyticsInvite', { inviteToken: PENDING_ENROLL_INVITE_, deviceLabel: navigator.userAgent.slice(0, 120) })
       .then(function (res) {
+        stopTicker();
         if (!res.ok) { setMsg('Device enrollment failed: ' + res.error); return; }
         DEVICE_TOKEN = res.deviceToken;
         storeDeviceToken_(DEVICE_TOKEN);
         setMsg('Device enrolled - this browser now has Period Analytics access.');
       })
-      .catch(function () { setMsg('Device enrollment failed: network error. The link is single-use - if it was consumed, ask for a new one.'); });
+      .catch(function () { stopTicker(); setMsg('Device enrollment failed: network error. The link is single-use - if it was consumed, ask for a new one.'); });
   }
 
   // applyAccessGate_ only overwrites statusMsg when access is absent, so
