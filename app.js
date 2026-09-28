@@ -14,15 +14,36 @@
   function timeStart() { return performance.now(); }
   function timeEnd(label, start) { console.log('TIMING ' + label + ' ' + Math.round(performance.now() - start) + 'ms'); }
 
-  // Token lives only in a local variable from this point on - never
-  // re-read from location.search again, and stripped from the visible
-  // URL/history immediately so it doesn't linger in the address bar,
-  // browser history, or a screen share any longer than necessary.
+  // 2026-09-28 reliability fix: a real reviewer opening this page on
+  // mobile (Samsung Internet / Chrome Android both suspend and restore
+  // background tabs by URL) would previously see "No token in URL." on
+  // any reload or tab restore - the token was captured into TOKEN
+  // correctly on first load, but was ALSO erased from the visible URL/
+  // history at that exact moment (see below), so a later reload had
+  // nothing left to read. sessionStorage closes that gap as a pure
+  // reload/tab-resume mechanism - never a security boundary; the
+  // backend still validates the token on every single protected request
+  // exactly as before, and this key clears the moment the tab/browser
+  // session ends (never localStorage, which would outlive the session).
+  //
+  // ONE bootstrap, one priority order, used everywhere TOKEN is read:
+  //   1. `?token=` in the URL - always wins, always replaces whatever
+  //      was previously stored (opening a new/different review link in
+  //      the same tab must never keep using an old session's token).
+  //   2. sessionStorage - the reload/tab-restore fallback.
+  //   3. missing - handled explicitly below, never silently granted.
+  var SESSION_TOKEN_KEY_ = 'hmgReviewToken';
+  function readStoredToken_() { try { return sessionStorage.getItem(SESSION_TOKEN_KEY_) || ''; } catch (e) { return ''; } }
+  function storeToken_(t) { try { sessionStorage.setItem(SESSION_TOKEN_KEY_, t); } catch (e) { /* private mode etc. - falls back to URL-only for this load */ } }
+  function clearStoredToken_() { try { sessionStorage.removeItem(SESSION_TOKEN_KEY_); } catch (e) { /* ignore */ } }
+
   var params = new URLSearchParams(location.search);
-  var TOKEN = params.get('token') || '';
+  var urlToken = params.get('token') || '';
   if (params.has('token')) {
     history.replaceState(null, '', location.pathname);
   }
+  var TOKEN = urlToken || readStoredToken_();
+  if (urlToken) storeToken_(urlToken);
 
   /** JSONP only - see the security review this POC came out of: this is
    * READ-ONLY in the intended production design (getData). The single
@@ -273,15 +294,33 @@
   })();
 
   if (!TOKEN) {
-    document.getElementById('status').textContent = 'No token in URL.';
+    // Reached ONLY when neither the URL nor sessionStorage has a token -
+    // a genuinely fresh tab/session with no review link ever opened in
+    // it (requirement: closing the browser and later opening the bare
+    // site root must never magically grant access). Distinct wording
+    // from a backend rejection below - this one never reached the
+    // backend at all.
+    document.getElementById('status').textContent = 'Review link is incomplete - open the review link from your WhatsApp message again.';
   } else {
     var loadT0 = timeStart();
     jsonp('getData', {}).then(function (data) {
       timeEnd('initialLoad', loadT0);
-      if (!data.ok) { document.getElementById('status').textContent = 'Error: ' + data.error; return; }
+      if (!data.ok) {
+        // The backend already distinguishes these cleanly (data.error is
+        // one of "Invalid link.", "This link has expired.", "This link
+        // has been revoked.") - shown as-is, never re-labeled. Any of
+        // them means this token is no longer good for anything, so it's
+        // dropped now rather than silently retried on the next reload.
+        clearStoredToken_();
+        document.getElementById('status').textContent = data.error || 'This review link is no longer valid.';
+        return;
+      }
       renderData(data);
     }).catch(function (e) {
-      document.getElementById('status').textContent = 'Network error: ' + e.message;
+      // A timeout/network failure is NOT proof the token is bad - keep
+      // it stored so reloading (once connectivity is back) retries with
+      // the same session rather than dead-ending into "link is missing".
+      document.getElementById('status').textContent = 'Could not load review data. Check your connection and reload.';
     });
   }
 
