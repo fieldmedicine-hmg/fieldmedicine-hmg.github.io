@@ -27,23 +27,49 @@
   // session ends (never localStorage, which would outlive the session).
   //
   // ONE bootstrap, one priority order, used everywhere TOKEN is read:
-  //   1. `?token=` in the URL - always wins, always replaces whatever
-  //      was previously stored (opening a new/different review link in
-  //      the same tab must never keep using an old session's token).
-  //   2. sessionStorage - the reload/tab-restore fallback.
-  //   3. missing - handled explicitly below, never silently granted.
+  //   1. `?token=` in the URL, PRESENT (regardless of value) - always
+  //      wins, always replaces whatever was previously stored. A blank
+  //      `?token=` is a deliberate "no token" signal, not "keep using
+  //      the old session" - opening a stripped/malformed link must
+  //      never silently fall through to a stale valid session.
+  //   2. No `token` param at all - sessionStorage, the reload/tab-
+  //      restore fallback (this is the ONLY case that consults it).
+  //   3. Neither - missing, handled explicitly below, never granted.
   var SESSION_TOKEN_KEY_ = 'hmgReviewToken';
   function readStoredToken_() { try { return sessionStorage.getItem(SESSION_TOKEN_KEY_) || ''; } catch (e) { return ''; } }
   function storeToken_(t) { try { sessionStorage.setItem(SESSION_TOKEN_KEY_, t); } catch (e) { /* private mode etc. - falls back to URL-only for this load */ } }
   function clearStoredToken_() { try { sessionStorage.removeItem(SESSION_TOKEN_KEY_); } catch (e) { /* ignore */ } }
 
-  var params = new URLSearchParams(location.search);
-  var urlToken = params.get('token') || '';
-  if (params.has('token')) {
-    history.replaceState(null, '', location.pathname);
+  // Removes ONLY the `token` param, preserving every other query param
+  // and the hash fragment - never collapses the URL down to the bare
+  // path (a `?source=whatsapp` or `#section` some future caller adds
+  // must survive sanitization untouched).
+  function stripTokenFromUrl_() {
+    var url = new URL(location.href);
+    url.searchParams.delete('token');
+    var qs = url.searchParams.toString();
+    history.replaceState(null, '', location.pathname + (qs ? '?' + qs : '') + location.hash);
   }
-  var TOKEN = urlToken || readStoredToken_();
-  if (urlToken) storeToken_(urlToken);
+
+  var params = new URLSearchParams(location.search);
+  var hasUrlToken = params.has('token');
+  var urlToken = params.get('token') || '';
+  if (hasUrlToken) stripTokenFromUrl_();
+
+  var TOKEN;
+  if (hasUrlToken) {
+    if (urlToken) {
+      TOKEN = urlToken;
+      storeToken_(TOKEN);
+    } else {
+      // `?token=` present but blank - explicit "no token", not "use the
+      // old one". Drops any previously stored session outright.
+      TOKEN = '';
+      clearStoredToken_();
+    }
+  } else {
+    TOKEN = readStoredToken_();
+  }
 
   /** JSONP only - see the security review this POC came out of: this is
    * READ-ONLY in the intended production design (getData). The single
@@ -89,6 +115,22 @@
       };
       document.body.appendChild(scriptEl);
     });
+  }
+
+  // Read directly from the isolated backend's own source (Code.js,
+  // doGet): these THREE exact strings are the only ones ever returned
+  // by the one token-validation block every action (getData AND every
+  // write) passes through BEFORE its own logic runs - a lock-busy retry
+  // ({retryable:true}), "already submitted", "reason required", "must
+  // go through the secure bridge", or a caught internal exception are
+  // all returned from LATER, action-specific code and never overlap
+  // with these strings. An exact allowlist match, never a substring
+  // guess, so a transient/operational failure can never be mistaken for
+  // a bad token. 'Missing/invalid token' is the WRITE-bridge Worker's
+  // OWN pre-backend shape check (worker.js) - equally unambiguous.
+  var TERMINAL_TOKEN_ERRORS_ = ['Invalid link.', 'This link has expired.', 'This link has been revoked.', 'Missing/invalid token'];
+  function isTerminalTokenError_(data) {
+    return !!data && data.ok === false && TERMINAL_TOKEN_ERRORS_.indexOf(data.error) !== -1;
   }
 
   /** Small DOM builder - every value that could ever originate from a
@@ -229,6 +271,11 @@
         tagEl.className = 'tag tag-' + label;
         actionsEl.parentNode.removeChild(actionsEl);
       } else {
+        // The token can expire/be revoked between page load and a write
+        // (a reviewer who leaves the tab open past expiry) - only drop
+        // the stored session if THIS was that terminal case, never for
+        // an ordinary write failure ("already submitted", busy, etc).
+        if (isTerminalTokenError_(res)) clearStoredToken_();
         window.alert('Error: ' + res.error);
         buttons.forEach(function (b) { b.disabled = false; });
       }
@@ -247,6 +294,7 @@
       if (res.ok) {
         jsonp('getData', {}).then(renderData);
       } else {
+        if (isTerminalTokenError_(res)) clearStoredToken_();
         window.alert('Error: ' + res.error);
         btn.disabled = false;
         btn.textContent = 'Bulk Approve Remaining';
@@ -268,6 +316,7 @@
       if (res.ok) {
         jsonp('getData', {}).then(renderData);
       } else {
+        if (isTerminalTokenError_(res)) clearStoredToken_();
         window.alert('Error: ' + res.error);
         btn.disabled = false;
         btn.textContent = 'Final Submit';
@@ -306,12 +355,11 @@
     jsonp('getData', {}).then(function (data) {
       timeEnd('initialLoad', loadT0);
       if (!data.ok) {
-        // The backend already distinguishes these cleanly (data.error is
-        // one of "Invalid link.", "This link has expired.", "This link
-        // has been revoked.") - shown as-is, never re-labeled. Any of
-        // them means this token is no longer good for anything, so it's
-        // dropped now rather than silently retried on the next reload.
-        clearStoredToken_();
+        // Only a TERMINAL token rejection drops the stored session - a
+        // transient failure (busy/retryable lock, a caught internal
+        // error) must never destroy a still-valid review session over a
+        // momentary backend hiccup; reloading should just retry it.
+        if (isTerminalTokenError_(data)) clearStoredToken_();
         document.getElementById('status').textContent = data.error || 'This review link is no longer valid.';
         return;
       }
