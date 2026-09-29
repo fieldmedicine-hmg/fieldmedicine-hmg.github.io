@@ -392,9 +392,16 @@
         if (!res.ok) {
           // A real, confirmed backend response - genuinely did not
           // succeed, so a definitive failure message is accurate here.
+          // Diagnostic detail (attempt count/last upstream status, never
+          // a secret or token) goes to console only - Phase 13 (2026-09-
+          // 29): a future genuine contract break should be distinguishable
+          // from this known transient echo-redirect flakiness by whoever
+          // is debugging it, without exposing internals to the operator.
+          if (res.debug) console.log('REFRESH_DIAGNOSTIC', JSON.stringify(res.debug));
           resultHost.innerHTML = '';
           resultHost.appendChild(el('div', 'meta report-error', 'Data was not updated. Please try again.'));
-          resultHost.appendChild(el('div', 'meta progress-estimate-note', String(res.error || '')));
+          resultHost.appendChild(el('div', 'meta progress-estimate-note',
+            String(res.error || '') + (res.retryable ? ' - this is usually transient; trying again in a moment often succeeds.' : '')));
           return;
         }
 
