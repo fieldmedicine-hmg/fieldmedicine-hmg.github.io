@@ -150,7 +150,7 @@
     meta.appendChild(el('b', null, data.reviewer));
     meta.appendChild(document.createTextNode(' · Zone: '));
     meta.appendChild(el('b', null, data.zone));
-    meta.appendChild(document.createTextNode(' · Date: '));
+    meta.appendChild(document.createTextNode(data.periodStart ? ' · Period: ' : ' · Date: '));
     meta.appendChild(el('b', null, data.reviewDate));
     app.appendChild(meta);
 
@@ -159,7 +159,13 @@
       app.appendChild(doneBanner);
     }
 
+    var lastDay = null;
     (data.rows || []).forEach(function (r, i) {
+      // A period review lists several days: one header per day (rows arrive ordered by day).
+      if (r.workDate && r.workDate !== lastDay) {
+        lastDay = r.workDate;
+        app.appendChild(el('div', 'day-header', formatDay(r.workDate)));
+      }
       var card = el('div', 'emp-card');
       card.id = 'row-' + i;
 
@@ -178,7 +184,7 @@
         var actions = el('div', 'row-actions');
 
         var approveBtn = el('button', null, 'Approve');
-        approveBtn.addEventListener('click', function () { decide('approve', r.employeeCode, null, tag, actions); });
+        approveBtn.addEventListener('click', function () { decide('approve', r.employeeCode, null, tag, actions, r.workDate); });
         actions.appendChild(approveBtn);
 
         var modifyBtn = el('button', 'btn-secondary', 'Modify');
@@ -186,7 +192,7 @@
           var reason = window.prompt('Reason for modifying this employee\'s status:');
           if (reason === null) return;
           if (!reason.trim()) { window.alert('A reason is required.'); return; }
-          decide('modify', r.employeeCode, reason, tag, actions);
+          decide('modify', r.employeeCode, reason, tag, actions, r.workDate);
         });
         actions.appendChild(modifyBtn);
 
@@ -195,7 +201,7 @@
           var reason = window.prompt('Reason for rejecting this employee\'s status:');
           if (reason === null) return;
           if (!reason.trim()) { window.alert('A reason is required.'); return; }
-          decide('reject', r.employeeCode, reason, tag, actions);
+          decide('reject', r.employeeCode, reason, tag, actions, r.workDate);
         });
         actions.appendChild(rejectBtn);
 
@@ -242,13 +248,19 @@
     }).catch(function () { /* still offline - the alert already told the user */ });
   }
 
-  function decide(action, code, reason, tagEl, actionsEl) {
+  function formatDay(ymd) {
+    try { return new Date(ymd + 'T00:00:00Z').toLocaleDateString('en-GB', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' }); }
+    catch (e) { return String(ymd); }
+  }
+
+  function decide(action, code, reason, tagEl, actionsEl, workDate) {
     var buttons = actionsEl.querySelectorAll('button');
     if (actionsEl.getAttribute('data-busy') === '1') return; // double-click guard
     actionsEl.setAttribute('data-busy', '1');
     buttons.forEach(function (b) { b.disabled = true; });
     var extra = { employeeCode: code };
     if (reason) extra.reason = reason;
+    if (workDate) extra.workDate = workDate; // period reviews only; a one-day link never sends it
     var t0 = timeStart();
     bridgeWrite(action, extra).then(function (res) {
       timeEnd(action, t0);

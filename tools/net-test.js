@@ -31,6 +31,10 @@ async function main() {
     [{ ok: false, code: 'COMPLETED', error: 'done' }, 'ALREADY_SUBMITTED'],
     [{ ok: false, error: 'Unexpected backend response' }, 'BAD_RESPONSE_TRANSIENT'],
     [{ ok: false, error: 'something odd' }, 'BACKEND'],
+    // Phase 4 (period reviews)
+    [{ ok: false, code: 'PERIOD_OVERLAP', error: 'A live review link already covers part of this period.' }, 'PERIOD_OVERLAP'],
+    [{ ok: false, code: 'WORKDATE_REQUIRED', error: 'x' }, 'VALIDATION'],
+    [{ ok: false, code: 'OUT_OF_PERIOD', error: 'x' }, 'VALIDATION'],
   ];
   cases.forEach(function (c) { check('classify ' + JSON.stringify(c[0]).slice(0, 70) + ' -> ' + c[1], Net.classifyBackend(c[0]) === c[1], Net.classifyBackend(c[0])); });
   ['TOKEN_INVALID', 'TOKEN_EXPIRED', 'TOKEN_REVOKED', 'TOKEN_MISSING'].forEach(function (k) {

@@ -47,6 +47,8 @@
     ALREADY_SUBMITTED: 'ALREADY_SUBMITTED', COMPLETED: 'ALREADY_SUBMITTED', PENDING_REMAINING: 'PENDING_REMAINING',
     FORBIDDEN: 'PERMISSION', REASON_REQUIRED: 'VALIDATION', INVALID_REQUEST: 'VALIDATION', OUT_OF_SCOPE: 'VALIDATION',
     NO_ASSIGNMENT: 'NO_ASSIGNMENT', NOT_REISSUABLE: 'NOT_REISSUABLE', ROUTING: 'ROUTING', SERVER_ERROR: 'SERVER', UNKNOWN_ACTION: 'SERVER',
+    // Phase 4 (period reviews)
+    PERIOD_OVERLAP: 'PERIOD_OVERLAP', WORKDATE_REQUIRED: 'VALIDATION', OUT_OF_PERIOD: 'VALIDATION',
   };
   var MESSAGE_TO_KIND = {
     'Invalid link.': 'TOKEN_INVALID',
@@ -90,6 +92,7 @@
       case 'PERMISSION': return 'This action is not permitted.';
       case 'NO_ASSIGNMENT': return 'This review has not been prepared yet. Use Prepare first.';
       case 'NOT_REISSUABLE': return backendError || 'This review link cannot be reissued right now.';
+      case 'PERIOD_OVERLAP': return backendError || 'A live review link already covers part of this period for this group.';
       case 'ROUTING': return backendError || 'No reviewer is configured for this group.';
       case 'VALIDATION': return backendError || 'The request was not accepted.';
       case 'SERVER': return 'The server reported a problem. Please try again; if it keeps happening, contact the office.';

@@ -22,12 +22,24 @@
   </div>
 
   <div class="analytics-section">
-    <div class="section-title">Daily Operations &amp; Review Center</div>
-    <div class="control-card">
-      <label for="reviewDateInput">Review Date</label><br>
-      <input type="date" id="reviewDateInput">
+    <div class="section-title">Attendance Period &amp; Review Center</div>
+    <div class="progress-steps">1. Select period &rarr; 2. Process Attendance &rarr; 3. Review groups &rarr; 4. Generate / manage link</div>
+    <div class="filter-bar">
+      <div class="filter-field">
+        <label for="periodFrom">From Date</label>
+        <input type="date" id="periodFrom">
+      </div>
+      <div class="filter-field">
+        <label for="periodTo">To Date</label>
+        <input type="date" id="periodTo">
+      </div>
+      <div class="filter-field">
+        <button id="processBtn" class="btn-primary">Process Attendance</button>
+      </div>
     </div>
-    <div id="statusMsg" class="meta"></div>
+    <div id="periodError" class="meta report-error" role="alert"></div>
+    <div id="statusMsg" class="meta" role="status"></div>
+    <div id="periodSummary"></div>
     <div id="cardsHost"></div>
   </div>
 
