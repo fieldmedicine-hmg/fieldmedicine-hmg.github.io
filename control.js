@@ -38,7 +38,7 @@
   // keep the page on "Loading..." forever any more.
   var Net = window.HMGNet;
   var TIMEOUTS = {
-    status: 45000,       // getDailyAttendanceStatus / getDataSyncStatus (read-only)
+    status: 75000,       // getDailyAttendanceStatus / getDataSyncStatus (read-only); Apps Script latency spikes of 40s+ were measured even for trivial calls
     discover: 40000,     // discoverGroups JSONP (read-only)
     rebuild: 240000,     // ensureDateRangeFresh - Apps Script's own hard cap is 6 min
     refresh: 280000,     // refreshRawData (Jotform sync + rebuild)
@@ -291,7 +291,7 @@
     statusLine.appendChild(tag);
     box.appendChild(statusLine);
 
-    var resentLine = el('div', 'meta', card.lastResentAt ? 'Last resent: ' + formatLocal(card.lastResentAt) : '');
+    var resentLine = el('div', 'meta', card.lastResentAt ? 'Last link prepared for WhatsApp: ' + formatLocal(card.lastResentAt) : '');
     if (!card.lastResentAt) resentLine.hidden = true;
     box.appendChild(resentLine);
     var msgLine = el('div', 'meta');
@@ -310,7 +310,7 @@
       box.appendChild(el('div', 'meta', 'Review submitted.'));
     } else {
       var needsNewLink = card.status === 'EXPIRED' || card.status === 'REVOKED';
-      var resendBtn = el('button', 'btn-primary', needsNewLink ? 'Resend (new link)' : 'Resend');
+      var resendBtn = el('button', 'btn-primary', needsNewLink ? 'Resend via WhatsApp (new link)' : 'Resend via WhatsApp');
       resendBtn.addEventListener('click', function () {
         doResend(card, reviewDate, resendBtn, box, tag, resentLine, msgLine, needsNewLink);
       });
@@ -345,18 +345,21 @@
    * disabled while the request is in flight and the backend runs inside its
    * assignment lock, so a double-click can never create two links.
    *
-   * Honest scope: WhatsApp cannot be driven from here - this opens the
-   * wa.me chat with the message pre-filled and the person presses Send. The
-   * success text therefore says the link was resent only once that chat was
-   * actually opened; otherwise it says the link is ready.
+   * Honest scope: WhatsApp cannot be driven from here and the system cannot
+   * observe delivery. This prepares/looks up the link, logs it, and opens the
+   * wa.me chat with the message pre-filled; the person presses Send. Every
+   * label and message says exactly that ("Resend via WhatsApp", "WhatsApp
+   * opened ... nothing has been sent yet") and never claims the message was
+   * sent or delivered. If the browser blocks the popup the message says the
+   * link is ready and offers an Open WhatsApp button.
    */
   function doResend(card, reviewDate, btn, box, tag, resentLine, msgLine, needsNewLink) {
     if (box.getAttribute('data-busy') === '1') return; // duplicate-click guard
-    if (needsNewLink && !window.confirm('Resend review link to ' + card.reviewer + '?\n\nA NEW link will be created and the previous link will stop working.')) return;
+    if (needsNewLink && !window.confirm('Create a NEW review link for ' + card.reviewer + ' and open WhatsApp?\n\nThe previous link will stop working. Nothing is sent automatically - you press Send in WhatsApp.')) return;
     box.setAttribute('data-busy', '1');
     var label = btn.textContent;
     btn.disabled = true;
-    btn.textContent = 'Sending…';
+    btn.textContent = 'Preparing link…';
     showCardMessage(msgLine, 'Preparing the link…', false);
 
     var payload = { reviewDate: reviewDate, reviewType: card.reviewType, resend: 'true' };
@@ -383,19 +386,19 @@
         return;
       }
       var opened = openWhatsApp(res.whatsapp || card.whatsapp, reviewDate, card, res.managerUrl);
-      if (res.lastResentAt) { resentLine.hidden = false; resentLine.textContent = 'Last resent: ' + formatLocal(res.lastResentAt); }
+      if (res.lastResentAt) { resentLine.hidden = false; resentLine.textContent = 'Last link prepared for WhatsApp: ' + formatLocal(res.lastResentAt); }
       if (res.linkReused === false) {
         tag.className = 'tag tag-PREPARED';
         tag.textContent = 'PREPARED';
         card.status = 'PREPARED';
       }
       if (opened) {
-        showCardMessage(msgLine, 'Review link resent successfully.', false);
+        showCardMessage(msgLine, (res.linkReused === false ? 'New review link created. ' : '') + 'WhatsApp opened with the review link for ' + card.reviewer + '. Press Send in WhatsApp to deliver it - nothing has been sent yet.', false);
       } else {
         // Popup blocked: hand the person a real button (a click is a user gesture).
         while (msgLine.firstChild) msgLine.removeChild(msgLine.firstChild);
         msgLine.className = 'meta';
-        msgLine.appendChild(document.createTextNode('Review link is ready. '));
+        msgLine.appendChild(document.createTextNode((res.linkReused === false ? 'New review link created for ' : 'Review link ready for ') + card.reviewer + ' (nothing has been sent). '));
         var waBtn = el('button', 'btn-primary', 'Open WhatsApp');
         waBtn.addEventListener('click', function () {
           openWhatsApp(res.whatsapp || card.whatsapp, reviewDate, card, res.managerUrl);
