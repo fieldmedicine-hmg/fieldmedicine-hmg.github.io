@@ -55,6 +55,9 @@
     'Missing/invalid token': 'TOKEN_MISSING',
     'This review has already been submitted and is read-only.': 'ALREADY_SUBMITTED',
     'System is busy processing another request for this assignment. Please retry in a moment.': 'BUSY',
+    // The Worker's own answer when the Apps Script hop returned something that was not JSON (a Google
+    // redirect/HTML hiccup, measured at ~5% of calls). Transient: retried wherever the caller allows retries.
+    'Unexpected backend response': 'BAD_RESPONSE_TRANSIENT',
   };
   var TERMINAL_TOKEN_KINDS = { TOKEN_INVALID: true, TOKEN_MISSING: true, TOKEN_EXPIRED: true, TOKEN_REVOKED: true };
 
@@ -202,7 +205,7 @@
       return fn(n).then(function (body) {
         if (body && body.ok === false) {
           var kind = classifyBackend(body);
-          if (kind === 'BUSY' && n < retries) {
+          if ((kind === 'BUSY' || kind === 'BAD_RESPONSE_TRANSIENT') && n < retries) {
             var d = baseMs * Math.pow(2, n);
             if (opts.onRetry) opts.onRetry(n + 1, kind, d);
             return sleep(d).then(function () { return attempt(n + 1); });

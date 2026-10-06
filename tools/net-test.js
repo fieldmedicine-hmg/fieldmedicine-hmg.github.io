@@ -29,6 +29,7 @@ async function main() {
     [{ ok: false, error: 'System is busy processing another request for this assignment. Please retry in a moment.', retryable: true }, 'BUSY'],
     [{ ok: false, code: 'PENDING_REMAINING', error: '3 record(s) are still pending' }, 'PENDING_REMAINING'],
     [{ ok: false, code: 'COMPLETED', error: 'done' }, 'ALREADY_SUBMITTED'],
+    [{ ok: false, error: 'Unexpected backend response' }, 'BAD_RESPONSE_TRANSIENT'],
     [{ ok: false, error: 'something odd' }, 'BACKEND'],
   ];
   cases.forEach(function (c) { check('classify ' + JSON.stringify(c[0]).slice(0, 70) + ' -> ' + c[1], Net.classifyBackend(c[0]) === c[1], Net.classifyBackend(c[0])); });
@@ -79,6 +80,14 @@ async function main() {
   calls = 0;
   var busy = await Net.withRetry(function () { calls++; return Promise.resolve(calls < 2 ? { ok: false, retryable: true, error: 'busy' } : { ok: true }); }, { retries: 2, baseMs: 1, sleep: noSleep });
   check('backend "busy" (retryable:true) is retried and then succeeds', busy.ok && calls === 2, calls);
+
+  calls = 0;
+  var flaky = await Net.withRetry(function () { calls++; return Promise.resolve(calls < 3 ? { ok: false, error: 'Unexpected backend response' } : { ok: true }); }, { retries: 2, baseMs: 1, sleep: noSleep });
+  check('Worker "Unexpected backend response" is retried (bounded) and then succeeds', flaky.ok && calls === 3, calls);
+
+  calls = 0;
+  var noRetry = await Net.withRetry(function () { calls++; return Promise.resolve({ ok: false, error: 'Unexpected backend response' }); }, { retries: 0, baseMs: 1, sleep: noSleep });
+  check('with retries:0 (report / refresh) it is NOT retried - no duplicate side effects', calls === 1 && noRetry.ok === false, calls);
 
   calls = 0;
   var delays = [];
