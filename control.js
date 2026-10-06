@@ -344,11 +344,27 @@
   }
 
   // ------------------------------------------------------------------ Review groups: Generate / Copy / Resend / Regenerate
-  // Returns the opened window, or null if the browser blocked the popup (a popup opened after an async request has no user gesture).
-  function openWhatsApp(phone, ctx, card, url) {
+  // Returns the opened window, or null if the browser blocked the popup. A popup opened AFTER a slow request has no user
+  // gesture left and browsers block it - so Resend opens a blank window at the moment of the click (`pre`, still a user
+  // gesture) and only points it at wa.me once the link is known. Without `pre` it falls back to opening one directly.
+  function openWhatsApp(phone, ctx, card, url, pre) {
     var msg = encodeURIComponent('HMG Attendance Review — ' + periodPlain(ctx.from, ctx.to) + ' · ' + groupLabel(card) + ': ' + url);
-    return window.open('https://wa.me/' + normalizeSaudiPhone(phone) + '?text=' + msg, '_blank');
+    var wa = 'https://wa.me/' + normalizeSaudiPhone(phone) + '?text=' + msg;
+    if (pre && !pre.closed) {
+      try { pre.opener = null; } catch (e) { /* ignore */ }
+      try { pre.location = wa; return pre; } catch (e) { /* fall through to a direct open */ }
+    }
+    return window.open(wa, '_blank');
   }
+  /** Opens the blank window at click time (see openWhatsApp). null if the browser refuses - the flow then uses the Open WhatsApp button. */
+  function preOpenWhatsApp() {
+    try {
+      var w = window.open('about:blank', '_blank');
+      if (w && w.document) { try { w.document.title = 'WhatsApp'; w.document.body.textContent = 'Preparing the review link…'; } catch (e) { /* ignore */ } }
+      return w || null;
+    } catch (e) { return null; }
+  }
+  function closeQuietly(w) { try { if (w && !w.closed) w.close(); } catch (e) { /* ignore */ } }
 
   function periodPayload(card, ctx, extra) {
     var p = { reviewDate: ctx.from, reviewType: card.reviewType };
@@ -493,6 +509,7 @@
     function doResend(btn) {
       if (isBusy()) return;
       setBusy(true);
+      var pre = preOpenWhatsApp(); // still inside the click's user gesture
       var label = btn.textContent;
       btn.disabled = true; btn.textContent = 'Preparing link…';
       showCardMessage(msgLine, 'Preparing the link…', false);
@@ -500,16 +517,17 @@
       function retry() { unlock(); doResend(btn); }
       bridgePost('prepareReview', periodPayload(card, ctx, { resend: 'true' }), { timeoutMs: TIMEOUTS.write, retries: 1 }).then(function (res) {
         if (!res.ok) {
+          closeQuietly(pre);
           var kind = Net.classifyBackend(res);
           if (res.code === 'COMPLETED') { card.status = 'COMPLETED'; unlock(); paint(); showCardMessage(msgLine, 'This review is already completed - there is nothing to resend.', false); return; }
           showCardMessage(msgLine, 'Could not prepare the link. ' + Net.userMessage(kind, res.error), true, 'Retry Resend', Net.isRetryableKind(kind) ? retry : null);
           unlock();
           return;
         }
-        if (!res.managerUrl) { showCardMessage(msgLine, 'The review link could not be retrieved. Please try again.', true, 'Retry Resend', retry); unlock(); return; }
+        if (!res.managerUrl) { closeQuietly(pre); showCardMessage(msgLine, 'The review link could not be retrieved. Please try again.', true, 'Retry Resend', retry); unlock(); return; }
         var rotated = res.linkReused === false;
         applyResult(res);
-        var opened = openWhatsApp(res.whatsapp || card.whatsapp, ctx, card, res.managerUrl);
+        var opened = openWhatsApp(res.whatsapp || card.whatsapp, ctx, card, res.managerUrl, pre);
         setBusy(false);
         paint();
         if (opened) {
@@ -532,6 +550,7 @@
         }
       }).catch(function (e) {
         Net.logTech('resend failed', e);
+        closeQuietly(pre);
         showCardMessage(msgLine, 'Could not prepare the link. ' + Net.userMessage(e && e.kind), true, 'Retry Resend', retry);
         unlock();
       });
