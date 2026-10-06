@@ -106,10 +106,10 @@
   //   1. refreshRawData{syncOnly}    - the existing INCREMENTAL Jotform sync, without rebuilding any date
   //   2. ensureDateRangeFresh        - rebuilds ONLY the dates whose raw data is newer than their build (idempotent, locked,
   //                                    upserts Daily_Attendance - never duplicates, never touches other dates); sent in
-  //                                    7-day batches so one request stays far below Apps Script's 6-minute cap
+  //                                    bounded work per request (maxRebuild) so each request stays far below Apps Script's 6-minute cap
   //   3. discoverGroups{fromDate,toDate} - the groups that exist in the period (read-only)
   var PERIOD_KEY = 'hmgControlLastPeriod';
-  var CHUNK_DAYS = 7;
+  var REBUILD_PER_CALL = 6;   // stale dates one request may rebuild (~8-12 s each, measured) - keeps a request well inside the 6-minute cap
   var WARN_DAYS = 62;
   var generation = 0;
   var processing = false;
@@ -129,11 +129,6 @@
   }
   function ymd(t) { return new Date(t).toISOString().slice(0, 10); }
   function daysInclusive(a, b) { return Math.round((parseYmd(b) - parseYmd(a)) / 86400000) + 1; }
-  function chunkPeriod(from, to, size) {
-    var out = [], t = parseYmd(from), end = parseYmd(to);
-    while (t <= end) { var e = Math.min(t + (size - 1) * 86400000, end); out.push([ymd(t), ymd(e)]); t = e + 86400000; }
-    return out;
-  }
   function fmtDay(s) {
     try { return new Date(parseYmd(s)).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }); } catch (e) { return String(s); }
   }
@@ -188,7 +183,7 @@
     if (!v.ok) { showPeriodError(v.error); return; }
     showPeriodError('');
     if (v.days > WARN_DAYS && !opts.confirmed &&
-        !window.confirm('This period covers ' + v.days + ' days. It is processed safely in batches of ' + CHUNK_DAYS + ' days and can take several minutes the first time (dates that are already up to date are skipped). Continue?')) return;
+        !window.confirm('This period covers ' + v.days + ' days. Dates that are already up to date are skipped; the others are updated in safe batches, which can take several minutes the first time. Continue?')) return;
     try { localStorage.setItem(PERIOD_KEY, JSON.stringify({ from: from, to: to })); } catch (e) { /* convenience only */ }
 
     var myGen = ++generation;
@@ -224,26 +219,33 @@
     }
 
     function runChunks() {
-      var chunks = chunkPeriod(from, to, CHUNK_DAYS), i = 0;
+      // ONE request for the whole period. The server rebuilds at most REBUILD_PER_CALL stale dates per request and says how
+      // many are left (`remaining`), so a fully current period costs a single call and a period with many stale dates is
+      // worked off in bounded requests - each far below Apps Script's 6-minute cap. Each pass only rebuilds dates that are
+      // STILL stale, so retrying or repeating is always safe.
+      var totalStale = null, updated = 0, passes = 0;
       function next() {
-        if (i >= chunks.length) return Promise.resolve();
-        var c = chunks[i++];
-        stage('Processing ' + periodLabel(from, to) + '… updating attendance records' + (chunks.length > 1 ? ' (batch ' + i + ' of ' + chunks.length + ': ' + fmtDay(c[0]) + ' – ' + fmtDay(c[1]) + ')' : ''));
-        // retries:1 is safe - the call only rebuilds dates that are STILL stale, and the server serialises rebuilds with a lock.
-        return bridgePost('ensureDateRangeFresh', { fromStr: c[0], toStr: c[1] }, { timeoutMs: TIMEOUTS.rebuild, retries: 1 }).then(function (res) {
+        passes++;
+        stage('Processing ' + periodLabel(from, to) + '… updating attendance records' + (totalStale && totalStale > REBUILD_PER_CALL ? ' (' + updated + ' of ' + totalStale + ' days updated)' : ''));
+        return bridgePost('ensureDateRangeFresh', { fromStr: from, toStr: to, maxRebuild: REBUILD_PER_CALL }, { timeoutMs: TIMEOUTS.rebuild, retries: 1 }).then(function (res) {
           if (!current()) return null;
           if (!res.ok) {
             Net.logTech('period processing refused', { message: res.error });
             throw stageError('PROCESS', 'Processing attendance failed. ' + (res.error || 'The server could not process this period.'));
           }
-          (res.rebuilt || []).forEach(function (r) { rebuilt.push(r); });
+          (res.rebuilt || []).forEach(function (r) { rebuilt.push(r); if (r.ok) updated++; });
+          if (totalStale === null) totalStale = res.staleDatesFound;
           if (res.anyFailed) {
             var bad = (res.rebuilt || []).filter(function (r) { return !r.ok; })[0] || {};
             Net.logTech('period rebuild failed', bad);
             var writeish = /Service Spreadsheets|timed out|write|setValues|appendRow|lock/i.test(String(bad.error || ''));
             throw stageError(writeish ? 'WRITE' : 'PROCESS', (writeish ? 'Saving the attendance records failed' : 'Processing attendance failed') + (bad.date ? ' for ' + fmtDay(bad.date) : '') + '. Nothing outside the failed day was changed.');
           }
-          return next();
+          if (res.remaining > 0) {
+            if (!(res.rebuilt || []).length || passes > 64) throw stageError('PROCESS', 'Processing attendance stopped making progress (' + res.remaining + ' day' + (res.remaining === 1 ? '' : 's') + ' still to update). Please retry.');
+            return next();
+          }
+          return null;
         }, function (e) {
           Net.logTech('period processing transport failure', e);
           throw stageError('PROCESS', 'Processing attendance failed. ' + Net.userMessage(e && e.kind));
