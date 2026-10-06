@@ -2,9 +2,14 @@
   'use strict';
 
   var BACKEND = 'https://script.google.com/macros/s/AKfycbxcVYWRoQRe429lHHZsReYvJ3qVmD-EAK2WdWtY51iXxX0YOuW1-FqlAfd-1-AjdSpD/exec';
-  var WRITE_BRIDGE_ORIGIN = 'https://hmg-write-bridge-poc.fieldmedicine1.workers.dev';
-  var WRITE_BRIDGE = WRITE_BRIDGE_ORIGIN + '/';
-  var BUILD = 'dynamic-routing-1';
+  var WRITE_BRIDGE = 'https://hmg-write-bridge-poc.fieldmedicine1.workers.dev/';
+  var Net = window.HMGNet;
+
+  // Timeouts (2026-10-06 audit). Measured backend response times for these
+  // calls are 2-9s; the ceilings leave generous margin without letting a
+  // stalled request keep the page on "Loading..." forever.
+  var READ_TIMEOUT_MS = 25000;
+  var WRITE_TIMEOUT_MS = 45000;
 
   // TEST-only rough timing instrumentation (console only, never shown to
   // the reviewer) - per-request start times keyed by label, logged as
@@ -71,68 +76,6 @@
     TOKEN = readStoredToken_();
   }
 
-  /** JSONP only - see the security review this POC came out of: this is
-   * READ-ONLY in the intended production design (getData). The single
-   * 'approve' write action here exists ONLY to prove the write path
-   * conceptually against isolated TEST data; production writes are
-   * expected to move to a POST-capable bridge, never GET/JSONP. */
-  function jsonp(action, extraParams) {
-    return new Promise(function (resolve, reject) {
-      var cbName = 'cb_' + Math.random().toString(36).slice(2);
-      var settled = false;
-      var timeoutId = setTimeout(function () {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        reject(new Error('Request timed out'));
-      }, 15000);
-
-      function cleanup() {
-        clearTimeout(timeoutId);
-        delete window[cbName];
-        if (scriptEl.parentNode) scriptEl.parentNode.removeChild(scriptEl);
-      }
-
-      window[cbName] = function (data) {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve(data);
-      };
-
-      var qs = 'callback=' + encodeURIComponent(cbName) + '&token=' + encodeURIComponent(TOKEN) + '&action=' + encodeURIComponent(action);
-      Object.keys(extraParams || {}).forEach(function (k) {
-        qs += '&' + encodeURIComponent(k) + '=' + encodeURIComponent(extraParams[k]);
-      });
-
-      var scriptEl = document.createElement('script');
-      scriptEl.src = BACKEND + '?' + qs;
-      scriptEl.onerror = function () {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        reject(new Error('Network error loading backend script'));
-      };
-      document.body.appendChild(scriptEl);
-    });
-  }
-
-  // Read directly from the isolated backend's own source (Code.js,
-  // doGet): these THREE exact strings are the only ones ever returned
-  // by the one token-validation block every action (getData AND every
-  // write) passes through BEFORE its own logic runs - a lock-busy retry
-  // ({retryable:true}), "already submitted", "reason required", "must
-  // go through the secure bridge", or a caught internal exception are
-  // all returned from LATER, action-specific code and never overlap
-  // with these strings. An exact allowlist match, never a substring
-  // guess, so a transient/operational failure can never be mistaken for
-  // a bad token. 'Missing/invalid token' is the WRITE-bridge Worker's
-  // OWN pre-backend shape check (worker.js) - equally unambiguous.
-  var TERMINAL_TOKEN_ERRORS_ = ['Invalid link.', 'This link has expired.', 'This link has been revoked.', 'Missing/invalid token'];
-  function isTerminalTokenError_(data) {
-    return !!data && data.ok === false && TERMINAL_TOKEN_ERRORS_.indexOf(data.error) !== -1;
-  }
-
   /** Small DOM builder - every value that could ever originate from a
    * spreadsheet cell goes through .textContent (or is passed to
    * document.createTextNode), never through innerHTML/outerHTML. There
@@ -155,8 +98,50 @@
     return /^[A-Za-z0-9_-]+$/.test(s) ? s : 'UNKNOWN';
   }
 
+  // ---------- status area (loading / errors / retry) ----------
+  function statusEl() { return document.getElementById('status'); }
+  function setStatus(text) {
+    var s = statusEl();
+    while (s.firstChild) s.removeChild(s.firstChild);
+    s.textContent = text || '';
+  }
+  function setStatusWithRetry(text, onRetry) {
+    var s = statusEl();
+    while (s.firstChild) s.removeChild(s.firstChild);
+    s.appendChild(document.createTextNode(text + ' '));
+    var b = el('button', 'btn-primary', 'Retry');
+    b.addEventListener('click', function () { b.disabled = true; onRetry(); });
+    s.appendChild(b);
+  }
+
+  /** The ONE place a backend/transport failure becomes something the person
+   * sees. Terminal token problems end the session (no retry button, stored
+   * token dropped); transient ones offer Retry. Technical detail -> console. */
+  function presentFailure(kindOrErr, backendBody, retryFn) {
+    var kind = typeof kindOrErr === 'string' ? kindOrErr : (kindOrErr && kindOrErr.kind) || 'BACKEND';
+    if (kindOrErr && typeof kindOrErr !== 'string') Net.logTech('request failed', kindOrErr);
+    else Net.logTech('backend refused', { kind: kind, message: backendBody && backendBody.error });
+    var msg = Net.userMessage(kind, backendBody && backendBody.error);
+    if (Net.isTerminalTokenKind(kind)) {
+      clearStoredToken_();
+      var app = document.getElementById('app');
+      while (app.firstChild) app.removeChild(app.firstChild);
+      setStatus(msg);
+      return msg;
+    }
+    if (retryFn) setStatusWithRetry(msg, retryFn);
+    else setStatus(msg);
+    return msg;
+  }
+
+  function jsonpGetData(onSlow) {
+    return Net.withRetry(function () {
+      return Net.jsonp(BACKEND, { token: TOKEN, action: 'getData' }, { timeoutMs: READ_TIMEOUT_MS, onSlow: onSlow });
+    }, { retries: 2, baseMs: 1500 });
+  }
+
   function renderData(data) {
-    document.getElementById('status').textContent = '';
+    setStatus('');
     var app = document.getElementById('app');
     while (app.firstChild) app.removeChild(app.firstChild); // clearing only, never inserting untrusted markup
 
@@ -221,7 +206,7 @@
 
     if (!data.completed && (data.rows || []).length > 0) {
       var bulkBar = el('div', 'bulk-bar');
-      var bulkBtn = el('button', 'btn-secondary', 'Bulk Approve Remaining');
+      var bulkBtn = el('button', 'btn-secondary', 'Approve All Remaining');
       bulkBtn.addEventListener('click', function () { bulkApprove(bulkBtn); });
       bulkBar.appendChild(bulkBtn);
 
@@ -237,28 +222,30 @@
    * see the security review this POC came out of. A real fetch() POST,
    * same-origin-checked by the Worker (Access-Control-Allow-Origin
    * locked to this exact page's origin), never a client-supplied target
-   * URL, never a generic proxy. */
+   * URL, never a generic proxy.
+   *
+   * 2026-10-06 audit: hard timeout + bounded retry. Retrying is safe: the
+   * backend treats an identical repeat of Approve/Modify/Reject, Approve
+   * All Remaining and Final Submit as a no-op (idempotent), so a response
+   * lost in transit can be re-sent without creating a duplicate decision. */
   function bridgeWrite(action, extraParams) {
-    return fetch(WRITE_BRIDGE, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(Object.assign({ action: action, token: TOKEN }, extraParams || {})),
-    }).then(function (resp) { return resp.json(); });
+    return Net.withRetry(function () {
+      return Net.postJson(WRITE_BRIDGE, Object.assign({ action: action, token: TOKEN }, extraParams || {}), { timeoutMs: WRITE_TIMEOUT_MS });
+    }, { retries: 2, baseMs: 1500 });
   }
 
-  /** TEST-only: a resolved HTTP response (any status) always carries valid
-   * JSON from this Worker, so reaching this catch means fetch() itself
-   * rejected before any response existed - a network-layer failure that
-   * browsers (Safari especially) report only as an opaque "Load failed" /
-   * "Failed to fetch", indistinguishable from a CORS block, a DNS
-   * failure, or a CSP/connectivity block. This code + the /diag link is
-   * the diagnostic surfaced to the user instead of just that opaque text. */
-  function writeFailureMessage(e) {
-    return 'WRITE-FETCH-FAILED: ' + e.message + '\n\nTo help diagnose: open this link directly in Safari (not through this page) and tell us what you see:\n' + WRITE_BRIDGE_ORIGIN + '/diag';
+  /** After a write whose outcome we could not confirm (timeout/network even
+   * after retries) show the user the REAL saved state instead of guessing. */
+  function resyncAfterUncertainWrite() {
+    jsonpGetData().then(function (data) {
+      if (data && data.ok) { renderData(data); setStatus('We could not confirm your last action, so the page was refreshed with what is saved.'); }
+    }).catch(function () { /* still offline - the alert already told the user */ });
   }
 
   function decide(action, code, reason, tagEl, actionsEl) {
     var buttons = actionsEl.querySelectorAll('button');
+    if (actionsEl.getAttribute('data-busy') === '1') return; // double-click guard
+    actionsEl.setAttribute('data-busy', '1');
     buttons.forEach(function (b) { b.disabled = true; });
     var extra = { employeeCode: code };
     if (reason) extra.reason = reason;
@@ -271,42 +258,54 @@
         tagEl.className = 'tag tag-' + label;
         actionsEl.parentNode.removeChild(actionsEl);
       } else {
+        var kind = Net.classifyBackend(res);
         // The token can expire/be revoked between page load and a write
         // (a reviewer who leaves the tab open past expiry) - only drop
         // the stored session if THIS was that terminal case, never for
         // an ordinary write failure ("already submitted", busy, etc).
-        if (isTerminalTokenError_(res)) clearStoredToken_();
-        window.alert('Error: ' + res.error);
+        if (Net.isTerminalTokenKind(kind)) { presentFailure(kind, res); return; }
+        window.alert(Net.userMessage(kind, res.error));
+        actionsEl.removeAttribute('data-busy');
         buttons.forEach(function (b) { b.disabled = false; });
       }
     }).catch(function (e) {
-      window.alert(writeFailureMessage(e));
+      Net.logTech('write failed: ' + action, e);
+      window.alert(Net.userMessage(e && e.kind, e && e.message));
+      actionsEl.removeAttribute('data-busy');
       buttons.forEach(function (b) { b.disabled = false; });
+      resyncAfterUncertainWrite();
     });
   }
 
   function bulkApprove(btn) {
+    if (btn.disabled) return;
     btn.disabled = true;
     btn.textContent = 'Approving remaining…';
     var t0 = timeStart();
     bridgeWrite('bulkApproveRemaining', {}).then(function (res) {
       timeEnd('bulkApproveRemaining', t0);
       if (res.ok) {
-        jsonp('getData', {}).then(renderData);
-      } else {
-        if (isTerminalTokenError_(res)) clearStoredToken_();
-        window.alert('Error: ' + res.error);
-        btn.disabled = false;
-        btn.textContent = 'Bulk Approve Remaining';
+        return jsonpGetData().then(function (data) {
+          if (data && data.ok) { renderData(data); setStatus(res.approvedCount + ' remaining record(s) approved.'); }
+          else presentFailure(Net.classifyBackend(data || {}), data, loadReview);
+        });
       }
-    }).catch(function (e) {
-      window.alert(writeFailureMessage(e));
+      var kind = Net.classifyBackend(res);
+      if (Net.isTerminalTokenKind(kind)) { presentFailure(kind, res); return; }
+      window.alert(Net.userMessage(kind, res.error));
       btn.disabled = false;
-      btn.textContent = 'Bulk Approve Remaining';
+      btn.textContent = 'Approve All Remaining';
+    }).catch(function (e) {
+      Net.logTech('bulk approve failed', e);
+      window.alert(Net.userMessage(e && e.kind, e && e.message));
+      btn.disabled = false;
+      btn.textContent = 'Approve All Remaining';
+      resyncAfterUncertainWrite();
     });
   }
 
   function finalSubmit(btn) {
+    if (btn.disabled) return;
     if (!window.confirm('Submit this review as final? This cannot be changed afterward.')) return;
     btn.disabled = true;
     btn.textContent = 'Submitting…';
@@ -314,63 +313,59 @@
     bridgeWrite('submitFinalReview', {}).then(function (res) {
       timeEnd('submitFinalReview', t0);
       if (res.ok) {
-        jsonp('getData', {}).then(renderData);
-      } else {
-        if (isTerminalTokenError_(res)) clearStoredToken_();
-        window.alert('Error: ' + res.error);
-        btn.disabled = false;
-        btn.textContent = 'Final Submit';
+        return jsonpGetData().then(function (data) {
+          if (data && data.ok) renderData(data);
+          else presentFailure(Net.classifyBackend(data || {}), data, loadReview);
+        });
       }
-    }).catch(function (e) {
-      window.alert(writeFailureMessage(e));
+      var kind = Net.classifyBackend(res);
+      if (Net.isTerminalTokenKind(kind)) { presentFailure(kind, res); return; }
+      // e.g. PENDING_REMAINING: the backend says exactly how many are left.
+      window.alert(Net.userMessage(kind, res.error));
       btn.disabled = false;
       btn.textContent = 'Final Submit';
+    }).catch(function (e) {
+      Net.logTech('final submit failed', e);
+      window.alert(Net.userMessage(e && e.kind, e && e.message));
+      btn.disabled = false;
+      btn.textContent = 'Final Submit';
+      resyncAfterUncertainWrite();
     });
   }
 
-  // TEST-only visible build marker + a plain link (not fetch, not
-  // affected by CORS at all - a normal top-level Safari navigation) to
-  // the Worker's own /diag endpoint, so reachability of the write-bridge
-  // domain can be checked independently of any CORS/fetch failure mode.
-  (function renderDiagFooter() {
-    var footer = el('div', 'diag-footer');
-    footer.appendChild(document.createTextNode('TEST build: ' + BUILD + ' · '));
-    var link = document.createElement('a');
-    link.href = WRITE_BRIDGE_ORIGIN + '/diag';
-    link.textContent = 'check write-bridge reachability';
-    footer.appendChild(link);
-    document.querySelector('.wrap').appendChild(footer);
-  })();
-
-  if (!TOKEN) {
-    // Reached ONLY when neither the URL nor sessionStorage has a token -
-    // a genuinely fresh tab/session with no review link ever opened in
-    // it (requirement: closing the browser and later opening the bare
-    // site root must never magically grant access). Distinct wording
-    // from a backend rejection below - this one never reached the
-    // backend at all.
-    document.getElementById('status').textContent = 'Review link is incomplete - open the review link from your WhatsApp message again.';
-  } else {
+  function loadReview() {
+    if (!TOKEN) {
+      // Reached ONLY when neither the URL nor sessionStorage has a token -
+      // a genuinely fresh tab/session with no review link ever opened in
+      // it (requirement: closing the browser and later opening the bare
+      // site root must never magically grant access). Distinct wording
+      // from a backend rejection below - this one never reached the
+      // backend at all.
+      setStatus(Net.userMessage('TOKEN_MISSING'));
+      return;
+    }
+    setStatus('Loading your review…');
     var loadT0 = timeStart();
-    jsonp('getData', {}).then(function (data) {
+    jsonpGetData(function () { setStatus('Still loading… this can take a few more seconds.'); }).then(function (data) {
       timeEnd('initialLoad', loadT0);
       if (!data.ok) {
         // Only a TERMINAL token rejection drops the stored session - a
         // transient failure (busy/retryable lock, a caught internal
         // error) must never destroy a still-valid review session over a
         // momentary backend hiccup; reloading should just retry it.
-        if (isTerminalTokenError_(data)) clearStoredToken_();
-        document.getElementById('status').textContent = data.error || 'This review link is no longer valid.';
+        presentFailure(Net.classifyBackend(data), data, loadReview);
         return;
       }
       renderData(data);
     }).catch(function (e) {
       // A timeout/network failure is NOT proof the token is bad - keep
-      // it stored so reloading (once connectivity is back) retries with
-      // the same session rather than dead-ending into "link is missing".
-      document.getElementById('status').textContent = 'Could not load review data. Check your connection and reload.';
+      // it stored so retrying (once connectivity is back) uses the same
+      // session rather than dead-ending into "link is missing".
+      presentFailure(e, null, loadReview);
     });
   }
+
+  loadReview();
 
   // Exposed only for the XSS regression test harness (see security
   // review) - lets a test drive renderData() with a mocked payload

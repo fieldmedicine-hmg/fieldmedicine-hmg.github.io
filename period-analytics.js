@@ -8,12 +8,13 @@
   // through the SAME POST-only, secret-gated Worker bridge every write
   // action already uses, never a bare public GET/JSONP with a secret
   // embedded in this file.
+  // 2026-10-06 audit: bare fetch() had no timeout, so a stalled request left
+  // this page on "Loading..." forever. Now bounded (HMGNet, net.js); callers
+  // keep their existing contract - a Promise of the parsed JSON body that
+  // rejects on a transport failure.
+  var BRIDGE_TIMEOUT_MS = 330000; // longest action here is a PDF/Excel report; Apps Script's own cap is 6 min
   function bridgePost(action, extra) {
-    return fetch(WRITE_BRIDGE, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(Object.assign({ action: action }, extra || {})),
-    }).then(function (r) { return r.json(); });
+    return window.HMGNet.postJson(WRITE_BRIDGE, Object.assign({ action: action }, extra || {}), { timeoutMs: BRIDGE_TIMEOUT_MS });
   }
 
   // PERMANENT per-person Period Analytics credential (2026-09-09) - the

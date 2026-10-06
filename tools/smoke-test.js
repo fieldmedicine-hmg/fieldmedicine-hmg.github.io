@@ -101,6 +101,36 @@ async function main() {
     console.log('FAIL  discoverGroups: threw - ' + e.message);
   }
 
+  // ---- resend contract (2026-10-06): a resend for a slot that was never
+  // prepared is a pure READ - the backend refuses it with a stable code and
+  // writes nothing, so this is safe to run against production. ----
+  try {
+    var r3 = await callWorker('prepareReview', { reviewDate: '2024-01-01', reviewType: 'ZONE', zone: 'Diriyah', resend: 'true' });
+    check('resend on an unprepared slot: refused with code NO_ASSIGNMENT (and nothing written)', r3.data.ok === false && r3.data.code === 'NO_ASSIGNMENT', JSON.stringify(r3.data).slice(0, 160));
+    check('backend error bodies carry a machine-readable `code` and a `retryable` flag', typeof r3.data.code === 'string' && typeof r3.data.retryable === 'boolean');
+  } catch (e) {
+    failures++;
+    console.log('FAIL  resend contract: threw - ' + e.message);
+  }
+
+  // ---- token error contract: every rejection has a stable `code` ----
+  try {
+    var r4 = await callIsolatedBackendJsonp('getData', { token: 'not-a-real-token' });
+    check('invalid token -> code INVALID_TOKEN', r4.data.ok === false && r4.data.code === 'INVALID_TOKEN', JSON.stringify(r4.data));
+  } catch (e) {
+    failures++;
+    console.log('FAIL  invalid-token contract: threw - ' + e.message);
+  }
+
+  // ---- security contract: diagnostic reads must NOT be public ----
+  try {
+    var r5 = await callIsolatedBackendJsonp('debugAuthorizedUsersSchema', {});
+    check('diagnostic endpoint debugAuthorizedUsersSchema is refused without the bridge secret', r5.data.ok === false && r5.data.code === 'FORBIDDEN', JSON.stringify(r5.data).slice(0, 120));
+  } catch (e) {
+    failures++;
+    console.log('FAIL  diagnostic-gating contract: threw - ' + e.message);
+  }
+
   console.log('\n' + (failures === 0 ? 'ALL CONTRACT CHECKS PASSED' : failures + ' CONTRACT CHECK(S) FAILED'));
   process.exit(failures === 0 ? 0 : 1);
 }

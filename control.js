@@ -29,59 +29,41 @@
     history.replaceState(null, '', location.pathname);
   }
 
-  // 2026-09-10 production bug fix: this backend's own real response time
-  // (measured directly, repeatedly, against production) varies roughly
-  // 4-12+ seconds under real conditions - the previous 15000ms ceiling
-  // left too little margin and produced real "Request timed out" errors
-  // for requests that would have succeeded given a few more seconds.
-  // 30000ms is a measured, action-specific choice (this is the only
-  // jsonpGet caller in this file), not a blanket increase. `onSlow`
-  // (optional) fires once, part-way through the wait, so the UI can say
-  // it's still working rather than sitting on "Loading…" indefinitely.
-  var JSONP_TIMEOUT_MS = 30000;
-  var JSONP_SLOW_NOTICE_MS = 8000;
+  // 2026-10-06 audit: every request now goes through HMGNet (net.js) - hard
+  // timeouts, classified failures, bounded exponential retry for TRANSIENT
+  // failures only. Measured production response times (direct, repeated):
+  // discoverGroups 3-5s (cold start up to ~11s), Worker->Apps Script POSTs
+  // 3-13s, a rebuild of one date ~12s (it was ~93s before the backend
+  // fixes) - so the ceilings below are generous but finite: nothing can
+  // keep the page on "Loading..." forever any more.
+  var Net = window.HMGNet;
+  var TIMEOUTS = {
+    status: 45000,       // getDailyAttendanceStatus / getDataSyncStatus (read-only)
+    discover: 40000,     // discoverGroups JSONP (read-only)
+    rebuild: 240000,     // ensureDateRangeFresh - Apps Script's own hard cap is 6 min
+    refresh: 280000,     // refreshRawData (Jotform sync + rebuild)
+    write: 60000,        // prepareReview (prepare / reissue / resend)
+    report: 330000,      // generateV5Report
+  };
+  var SLOW_NOTICE_MS = 8000;
 
+  /** Read-only JSONP GET with one automatic retry on a transient failure. */
   function jsonpGet(action, params, onSlow) {
-    return new Promise(function (resolve, reject) {
-      var cbName = 'cb_' + Math.random().toString(36).slice(2);
-      var settled = false;
-      var timeoutId = setTimeout(function () {
-        if (settled) return;
-        settled = true; cleanup(); reject(new Error('Request timed out'));
-      }, JSONP_TIMEOUT_MS);
-      var slowId = onSlow ? setTimeout(function () { if (!settled) onSlow(); }, JSONP_SLOW_NOTICE_MS) : null;
-      function cleanup() {
-        clearTimeout(timeoutId);
-        if (slowId) clearTimeout(slowId);
-        delete window[cbName];
-        if (scriptEl.parentNode) scriptEl.parentNode.removeChild(scriptEl);
-      }
-      window[cbName] = function (data) {
-        if (settled) return;
-        settled = true; cleanup(); resolve(data);
-      };
-      var qs = 'callback=' + encodeURIComponent(cbName) + '&action=' + encodeURIComponent(action);
-      Object.keys(params || {}).forEach(function (k) { qs += '&' + encodeURIComponent(k) + '=' + encodeURIComponent(params[k]); });
-      var scriptEl = document.createElement('script');
-      scriptEl.src = BACKEND + '?' + qs;
-      scriptEl.onerror = function () {
-        if (settled) return;
-        settled = true; cleanup(); reject(new Error('Network error loading backend script'));
-      };
-      document.body.appendChild(scriptEl);
-    });
+    var p = Object.assign({ action: action }, params || {});
+    return Net.withRetry(function () {
+      return Net.jsonp(BACKEND, p, { timeoutMs: TIMEOUTS.discover, onSlow: onSlow, slowMs: SLOW_NOTICE_MS });
+    }, { retries: 1, baseMs: 1500 });
   }
 
-  // The one CONTROL-side mutation (prepare/reissue) - POST-only, through
-  // the same Worker bridge as every reviewer write action, never a bare GET.
-  function bridgePost(action, extra) {
-    return fetch(WRITE_BRIDGE, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(Object.assign({ action: action }, extra || {})),
-    }).then(function (r) { return r.json(); });
+  // POST through the Worker bridge. `opts.retries` is explicit per call:
+  // READ-ONLY and idempotent actions retry on transient failures; actions
+  // that create real state (report generation = a Drive file) never do.
+  function bridgePost(action, extra, opts) {
+    opts = opts || {};
+    return Net.withRetry(function () {
+      return Net.postJson(WRITE_BRIDGE, Object.assign({ action: action }, extra || {}), { timeoutMs: opts.timeoutMs || TIMEOUTS.write });
+    }, { retries: opts.retries || 0, baseMs: 1500, onRetry: opts.onRetry });
   }
-
   function setMsg(text) { document.getElementById('statusMsg').textContent = text || ''; }
 
   function el(tag, className, text) {
@@ -128,13 +110,32 @@
   // number, and only the LATEST one is allowed to touch the DOM.
   var reloadGeneration = 0;
 
-  // Automatic sheet freshness (2026-09-10): before discovering review
-  // groups for the selected date, check whether Daily_Attendance for
-  // THAT SPECIFIC date is current relative to All_Submissions (and any
-  // Area->Zone mapping fix) - reusing the SAME deterministic signal
-  // Data Sync's own status check already uses, never a weak global
-  // row-count guess. Only THAT one date is ever rebuilt, and only when
-  // actually stale - a current date never pays this cost.
+  function setMsgWithRetry(text, retryLabel, onRetry) {
+    var host = document.getElementById('statusMsg');
+    while (host.firstChild) host.removeChild(host.firstChild);
+    host.appendChild(document.createTextNode(text + ' '));
+    var b = el('button', 'btn-primary', retryLabel);
+    b.addEventListener('click', function () { b.disabled = true; onRetry(); });
+    host.appendChild(b);
+  }
+
+  /**
+   * Daily Operations load (2026-10-06 audit rewrite of the same flow):
+   *   Connecting to data source -> [Loading attendance data, only if the
+   *   date is stale] -> Processing employees -> Preparing manager groups
+   *   -> Ready.
+   * Every request has a timeout; read-only ones retry transient failures; a
+   * failure ends in a clear message + "Retry Data Collection" (never an
+   * endless spinner and never a full page refresh).
+   *
+   * Automatic sheet freshness (2026-09-10): before discovering review
+   * groups for the selected date, check whether Daily_Attendance for
+   * THAT SPECIFIC date is current relative to All_Submissions (and any
+   * Area->Zone mapping fix) - reusing the SAME deterministic signal
+   * Data Sync's own status check already uses, never a weak global
+   * row-count guess. Only THAT one date is ever rebuilt, and only when
+   * actually stale - a current date never pays this cost.
+   */
   function reload() {
     var reviewDate = document.getElementById('reviewDateInput').value;
     if (!reviewDate) return;
@@ -144,40 +145,40 @@
     while (host.firstChild) host.removeChild(host.firstChild);
     var dateInput = document.getElementById('reviewDateInput');
     dateInput.disabled = true; // debounce - one in-flight check/rebuild/discover cycle at a time
-    setMsg('Checking latest data…');
+    var startedAt = Date.now();
+    var tickHandle = null;
 
-    function finish() { if (myGeneration === reloadGeneration) dateInput.disabled = false; }
+    function current() { return myGeneration === reloadGeneration; }
+    function stage(text) { if (current()) setMsg(text); }
+    function stopTick() { if (tickHandle) { clearInterval(tickHandle); tickHandle = null; } }
+    function finish() { stopTick(); if (current()) dateInput.disabled = false; }
+    function fail(errOrBody, isBody) {
+      stopTick();
+      if (!current()) return;
+      var kind = isBody ? Net.classifyBackend(errOrBody) : (errOrBody && errOrBody.kind) || 'BACKEND';
+      Net.logTech('data collection failed', isBody ? { kind: kind, message: errOrBody && errOrBody.error } : errOrBody);
+      setMsgWithRetry('Could not complete data collection. ' + Net.userMessage(kind, isBody && errOrBody ? errOrBody.error : null), 'Retry Data Collection', reload);
+      finish();
+    }
 
-    bridgePost('getDailyAttendanceStatus', { dateStr: reviewDate }).then(function (statusRes) {
-      if (myGeneration !== reloadGeneration) return null;
-      if (!statusRes.ok) { setMsg('Error: ' + statusRes.error); finish(); return null; }
+    stage('Connecting to data source…');
+    bridgePost('getDailyAttendanceStatus', { dateStr: reviewDate }, {
+      timeoutMs: TIMEOUTS.status, retries: 2,
+      onRetry: function () { stage('Connection is slow - retrying…'); },
+    }).then(function (statusRes) {
+      if (!current()) return null;
+      if (!statusRes.ok) { fail(statusRes, true); return null; }
       if (!statusRes.stale) return true; // already current - skip straight to discovery, stays fast
-
-      setMsg('Updating attendance data… (0 sec)');
-      var startTime = Date.now();
-      var tickHandle = setInterval(function () {
-        if (myGeneration !== reloadGeneration) { clearInterval(tickHandle); return; }
-        setMsg('Updating attendance data… (' + Math.round((Date.now() - startTime) / 1000) + ' sec)');
-      }, 1000);
-      return bridgePost('ensureDateRangeFresh', { fromStr: reviewDate, toStr: reviewDate }).then(function (freshRes) {
-        clearInterval(tickHandle);
-        if (myGeneration !== reloadGeneration) return null;
-        if (!freshRes.ok || freshRes.anyFailed) {
-          setMsg('Could not update attendance data for this date. ' + (freshRes.error || 'Please try again.'));
-          finish();
-          return null;
-        }
-        return true;
-      });
+      return ensureFresh(reviewDate);
     }).then(function (proceed) {
-      if (proceed === null || myGeneration !== reloadGeneration) return;
-      setMsg('Loading review groups…');
+      if (proceed !== true || !current()) return;
+      stopTick();
+      stage('Processing employees…');
       return jsonpGet('discoverGroups', { reviewDate: reviewDate }, function () {
-        if (myGeneration !== reloadGeneration) return;
-        setMsg('Still loading… this can take longer during busier periods.');
+        stage('Preparing manager groups… this can take longer during busier periods.');
       }).then(function (data) {
-        if (myGeneration !== reloadGeneration) return;
-        if (!data.ok) { setMsg('Error: ' + data.error); return; }
+        if (!current()) return;
+        if (!data.ok) { fail(data, true); return; }
         if (!data.cards.length) {
           // Reached only after confirming freshness above, so an empty
           // result here is genuinely zero, not stale data - still double-
@@ -186,25 +187,64 @@
           checkDailyAttendanceBuilt(reviewDate, myGeneration);
           return;
         }
-        setMsg('Ready');
+        stage('Preparing manager groups…');
         data.cards.forEach(function (card) { host.appendChild(renderCard(card, reviewDate)); });
-        setTimeout(function () { if (myGeneration === reloadGeneration) setMsg(''); }, 800);
+        stage('Ready.');
+        console.log('TIMING dailyOperationsLoad ' + (Date.now() - startedAt) + 'ms');
+        setTimeout(function () { if (current()) setMsg(''); }, 1500);
       });
     }).catch(function (e) {
-      if (myGeneration !== reloadGeneration) return;
-      // A timeout is NOT proof the backend failed - every measured real
-      // call this bridge makes eventually succeeds, just sometimes slower
-      // than the wait allows. Never shown as "No attendance found" (that
-      // would be a false zero) and never auto-retried.
-      setMsg(e.message === 'Request timed out'
-        ? 'This is taking longer than usual. The data may still be loading - please try this date again in a moment.'
-        : 'Network error: ' + e.message);
+      fail(e, false);
     }).then(finish, finish);
+
+    /** Rebuilds the stale date, with a live seconds counter. If the request
+     * dies at the transport level (timeout / network) the rebuild may still
+     * be running or even finished on the server - so instead of guessing, ask
+     * the status endpoint a few times whether the date became current. */
+    function ensureFresh(date) {
+      stage('Loading attendance data… (0 sec)');
+      var t0 = Date.now();
+      tickHandle = setInterval(function () {
+        if (!current()) { stopTick(); return; }
+        setMsg('Loading attendance data… (' + Math.round((Date.now() - t0) / 1000) + ' sec)');
+      }, 1000);
+      return bridgePost('ensureDateRangeFresh', { fromStr: date, toStr: date }, { timeoutMs: TIMEOUTS.rebuild, retries: 0 }).then(function (freshRes) {
+        stopTick();
+        if (!current()) return null;
+        if (!freshRes.ok || freshRes.anyFailed) {
+          var firstErr = (freshRes.rebuilt || []).filter(function (r) { return !r.ok; })[0];
+          fail({ ok: false, error: (firstErr && firstErr.error) || freshRes.error || 'The attendance update did not complete.' }, true);
+          return null;
+        }
+        return true;
+      }, function (err) {
+        Net.logTech('ensureDateRangeFresh transport failure', err);
+        return verifyFreshAfterUncertainRebuild(date, err);
+      });
+    }
+
+    function verifyFreshAfterUncertainRebuild(date, originalErr) {
+      var attempts = 0, MAX = 4;
+      function check() {
+        if (!current()) return null;
+        attempts++;
+        stage('Checking whether the update finished… (' + attempts + '/' + MAX + ')');
+        return bridgePost('getDailyAttendanceStatus', { dateStr: date }, { timeoutMs: TIMEOUTS.status, retries: 0 }).then(function (s) {
+          if (s.ok && !s.stale) return true;
+          if (attempts >= MAX) throw originalErr;
+          return new Promise(function (r) { setTimeout(r, 8000); }).then(check);
+        }, function (e2) {
+          if (attempts >= MAX) throw originalErr;
+          return new Promise(function (r) { setTimeout(r, 8000); }).then(check);
+        });
+      }
+      return check();
+    }
   }
 
   function checkDailyAttendanceBuilt(reviewDate, myGeneration) {
     var host = document.getElementById('cardsHost');
-    bridgePost('getDailyAttendanceStatus', { dateStr: reviewDate }).then(function (res) {
+    bridgePost('getDailyAttendanceStatus', { dateStr: reviewDate }, { timeoutMs: TIMEOUTS.status, retries: 1 }).then(function (res) {
       if (myGeneration !== reloadGeneration) return;
       if (res.ok && !res.built) {
         host.appendChild(el('div', 'meta', 'This date has not been processed yet. Use "Refresh Data" above for this date, then reload.'));
@@ -217,6 +257,17 @@
       // accurate statement rather than blocking on a second failure.
       host.appendChild(el('div', 'meta', 'No attendance found for this date.'));
     });
+  }
+
+  function formatLocal(iso) {
+    try { return new Date(iso).toLocaleString(); } catch (e) { return String(iso); }
+  }
+
+  // Returns the opened window, or null if the browser blocked the popup (a
+  // popup opened after an async request has no user gesture).
+  function openWhatsApp(phone, reviewDate, card, url) {
+    var msg = encodeURIComponent('HMG Attendance Review — ' + reviewDate + ' · ' + groupLabel(card) + ': ' + url);
+    return window.open('https://wa.me/' + normalizeSaudiPhone(phone) + '?text=' + msg, '_blank');
   }
 
   function renderCard(card, reviewDate) {
@@ -240,55 +291,151 @@
     statusLine.appendChild(tag);
     box.appendChild(statusLine);
 
+    var resentLine = el('div', 'meta', card.lastResentAt ? 'Last resent: ' + formatLocal(card.lastResentAt) : '');
+    if (!card.lastResentAt) resentLine.hidden = true;
+    box.appendChild(resentLine);
+    var msgLine = el('div', 'meta');
+    msgLine.setAttribute('role', 'status');
+    box.appendChild(msgLine);
+
     var actions = el('div', 'row-actions');
 
     if (card.status === 'NONE') {
       var prepareBtn = el('button', 'btn-primary', 'Prepare');
-      prepareBtn.addEventListener('click', function () { doPrepare(card, reviewDate, false, prepareBtn, box); });
+      prepareBtn.addEventListener('click', function () { doPrepare(card, reviewDate, prepareBtn, box, msgLine); });
       actions.appendChild(prepareBtn);
-    } else if (card.status === 'EXPIRED') {
-      var reissueBtn = el('button', 'btn-primary', 'Reissue');
-      reissueBtn.addEventListener('click', function () { doPrepare(card, reviewDate, true, reissueBtn, box); });
-      actions.appendChild(reissueBtn);
     } else if (card.status === 'COMPLETED') {
-      // No send button - a completed review is done; only an explicit
-      // reissue (which only applies once it expires) can reopen it.
+      // No send button - a completed review is done and can never be
+      // resent or reissued (the backend refuses both).
+      box.appendChild(el('div', 'meta', 'Review submitted.'));
     } else {
-      // PREPARED / OPENED / IN_PROGRESS - link already exists and is
-      // still valid; offer to open WhatsApp again with that same link.
-      var waBtn = el('button', 'btn-primary', 'Open WhatsApp');
-      waBtn.addEventListener('click', function () {
-        var msg = encodeURIComponent('HMG Attendance Review — ' + reviewDate + ' · ' + groupLabel(card) + ': ' + card.managerUrl);
-        window.open('https://wa.me/' + normalizeSaudiPhone(card.whatsapp) + '?text=' + msg, '_blank');
+      var needsNewLink = card.status === 'EXPIRED' || card.status === 'REVOKED';
+      var resendBtn = el('button', 'btn-primary', needsNewLink ? 'Resend (new link)' : 'Resend');
+      resendBtn.addEventListener('click', function () {
+        doResend(card, reviewDate, resendBtn, box, tag, resentLine, msgLine, needsNewLink);
       });
-      actions.appendChild(waBtn);
+      actions.appendChild(resendBtn);
     }
 
     box.appendChild(actions);
     return box;
   }
 
-  function doPrepare(card, reviewDate, reissue, btn, box) {
+  function showCardMessage(msgLine, text, isError, retryLabel, onRetry) {
+    while (msgLine.firstChild) msgLine.removeChild(msgLine.firstChild);
+    msgLine.className = isError ? 'meta report-error' : 'meta';
+    msgLine.appendChild(document.createTextNode(text + (onRetry ? ' ' : '')));
+    if (onRetry) {
+      var b = el('button', 'btn-secondary', retryLabel);
+      b.addEventListener('click', function () { b.disabled = true; onRetry(); });
+      msgLine.appendChild(b);
+    }
+  }
+
+  /**
+   * RESEND (2026-10-06): re-sends the review link for ONE group to ITS
+   * reviewer. Never blind - the backend (prepareReview resend=true) looks at
+   * the assignment first:
+   *   - link still valid  -> the SAME link is reused (nothing changes);
+   *   - expired / revoked / reviewer changed -> ONE new link is issued and
+   *     the old one stops working (so there are never two live links);
+   *   - already submitted -> refused with a clear reason.
+   * Every resend is written to Audit_Log (RESEND_REQUESTED / _COMPLETED).
+   * A link-changing resend asks for confirmation first. The button is
+   * disabled while the request is in flight and the backend runs inside its
+   * assignment lock, so a double-click can never create two links.
+   *
+   * Honest scope: WhatsApp cannot be driven from here - this opens the
+   * wa.me chat with the message pre-filled and the person presses Send. The
+   * success text therefore says the link was resent only once that chat was
+   * actually opened; otherwise it says the link is ready.
+   */
+  function doResend(card, reviewDate, btn, box, tag, resentLine, msgLine, needsNewLink) {
+    if (box.getAttribute('data-busy') === '1') return; // duplicate-click guard
+    if (needsNewLink && !window.confirm('Resend review link to ' + card.reviewer + '?\n\nA NEW link will be created and the previous link will stop working.')) return;
+    box.setAttribute('data-busy', '1');
+    var label = btn.textContent;
     btn.disabled = true;
-    btn.textContent = reissue ? 'Reissuing…' : 'Preparing…';
+    btn.textContent = 'Sending…';
+    showCardMessage(msgLine, 'Preparing the link…', false);
+
+    var payload = { reviewDate: reviewDate, reviewType: card.reviewType, resend: 'true' };
+    if (card.reviewType === 'ZONE') payload.zone = card.zone;
+
+    function unlock() { box.removeAttribute('data-busy'); btn.disabled = false; btn.textContent = label; }
+    function retry() { unlock(); doResend(card, reviewDate, btn, box, tag, resentLine, msgLine, false); }
+
+    // One automatic retry on a transport failure is safe: if the first
+    // attempt actually landed, the retry just sees the (new) live link and
+    // reuses it - it cannot mint a second one.
+    bridgePost('prepareReview', payload, { timeoutMs: TIMEOUTS.write, retries: 1 }).then(function (res) {
+      if (!res.ok) {
+        var kind = Net.classifyBackend(res);
+        var text = Net.userMessage(kind, res.error);
+        var canRetry = Net.isRetryableKind(kind);
+        showCardMessage(msgLine, text, true, 'Retry Resend', canRetry ? retry : null);
+        unlock();
+        return;
+      }
+      if (!res.managerUrl) {
+        showCardMessage(msgLine, 'The review link could not be retrieved. Please try again.', true, 'Retry Resend', retry);
+        unlock();
+        return;
+      }
+      var opened = openWhatsApp(res.whatsapp || card.whatsapp, reviewDate, card, res.managerUrl);
+      if (res.lastResentAt) { resentLine.hidden = false; resentLine.textContent = 'Last resent: ' + formatLocal(res.lastResentAt); }
+      if (res.linkReused === false) {
+        tag.className = 'tag tag-PREPARED';
+        tag.textContent = 'PREPARED';
+        card.status = 'PREPARED';
+      }
+      if (opened) {
+        showCardMessage(msgLine, 'Review link resent successfully.', false);
+      } else {
+        // Popup blocked: hand the person a real button (a click is a user gesture).
+        while (msgLine.firstChild) msgLine.removeChild(msgLine.firstChild);
+        msgLine.className = 'meta';
+        msgLine.appendChild(document.createTextNode('Review link is ready. '));
+        var waBtn = el('button', 'btn-primary', 'Open WhatsApp');
+        waBtn.addEventListener('click', function () {
+          openWhatsApp(res.whatsapp || card.whatsapp, reviewDate, card, res.managerUrl);
+        });
+        msgLine.appendChild(waBtn);
+      }
+      unlock();
+    }).catch(function (e) {
+      Net.logTech('resend failed', e);
+      showCardMessage(msgLine, Net.userMessage(e && e.kind), true, 'Retry Resend', retry);
+      unlock();
+    });
+  }
+
+  function doPrepare(card, reviewDate, btn, box, msgLine) {
+    if (box.getAttribute('data-busy') === '1') return; // duplicate-click guard
+    box.setAttribute('data-busy', '1');
+    btn.disabled = true;
+    btn.textContent = 'Preparing…';
     var payload = { reviewDate: reviewDate, reviewType: card.reviewType };
     if (card.reviewType === 'ZONE') payload.zone = card.zone;
-    if (reissue) payload.reissue = 'true';
-    bridgePost('prepareReview', payload).then(function (res) {
+    function unlock() { box.removeAttribute('data-busy'); btn.disabled = false; btn.textContent = 'Prepare'; }
+    // Retry is safe: the backend returns the already-prepared link instead
+    // of minting a second one (find-or-create under its assignment lock).
+    bridgePost('prepareReview', payload, { timeoutMs: TIMEOUTS.write, retries: 1 }).then(function (res) {
       if (!res.ok) {
-        setMsg('Error: ' + res.error);
-        btn.disabled = false;
-        btn.textContent = reissue ? 'Reissue' : 'Prepare';
+        var kind = Net.classifyBackend(res);
+        showCardMessage(msgLine, Net.userMessage(kind, res.error), true, 'Retry', function () { unlock(); doPrepare(card, reviewDate, btn, box, msgLine); });
+        unlock();
         return;
       }
       // Always re-render this card from a fresh backend read rather than
       // trusting the mutation response alone as UI state - the backend
       // stays the single source of truth even immediately after a write.
+      box.removeAttribute('data-busy');
       reload();
     }).catch(function (e) {
-      setMsg('Network error: ' + e.message);
-      btn.disabled = false;
-      btn.textContent = reissue ? 'Reissue' : 'Prepare';
+      Net.logTech('prepare failed', e);
+      showCardMessage(msgLine, Net.userMessage(e && e.kind), true, 'Retry', function () { unlock(); doPrepare(card, reviewDate, btn, box, msgLine); });
+      unlock();
     });
   }
 
@@ -300,6 +447,15 @@
     var savedDate = localStorage.getItem(LAST_DATE_KEY);
     if (savedDate) document.getElementById('reviewDateInput').value = savedDate;
   } catch (e) { /* ignore */ }
+  // 2026-10-06 audit: control.html used to ship a hard-coded default of
+  // 2026-09-01 (an old test date), so a first visit - or a browser with
+  // localStorage cleared - silently opened a month-old day. Default to today
+  // in the operating timezone (Asia/Riyadh) instead.
+  if (!document.getElementById('reviewDateInput').value) {
+    try {
+      document.getElementById('reviewDateInput').value = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Riyadh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    } catch (e) { document.getElementById('reviewDateInput').value = new Date().toISOString().slice(0, 10); }
+  }
   reload();
 
   // ================== DATA SYNC (refreshRawData bridge) ==================
@@ -323,15 +479,21 @@
       return parts.join(' · ');
     }
 
+    // Returns a Promise of the status body (or null on failure) so the
+    // refresh flow can use it to CONFIRM an uncertain refresh.
     function loadStatus() {
-      bridgePost('getDataSyncStatus', {}).then(function (res) {
-        if (!res.ok) { statusLine.textContent = 'Status unavailable: ' + res.error; return; }
+      return bridgePost('getDataSyncStatus', {}, { timeoutMs: TIMEOUTS.status, retries: 2 }).then(function (res) {
+        if (!res.ok) { statusLine.textContent = 'Status unavailable.'; Net.logTech('getDataSyncStatus refused', res); return null; }
         statusLine.textContent = formatStatusLine(res.rawRowCount, res.lastRefreshAt);
-      }).catch(function () {
-        statusLine.textContent = 'Status unavailable (network error).';
+        return res;
+      }).catch(function (e) {
+        Net.logTech('getDataSyncStatus failed', e);
+        statusLine.textContent = 'Status unavailable (' + Net.userMessage(e && e.kind).replace(/ Please.*$/, '') + ').';
+        return null;
       });
     }
-    loadStatus();
+    var statusBeforeRefresh = null;
+    loadStatus().then(function (s) { statusBeforeRefresh = s; });
 
     // Typical observed duration for a full refresh - a client-side
     // ESTIMATE only (see the same disclaimer pattern used for report
@@ -383,7 +545,18 @@
       }, 400);
 
       var reviewDate = document.getElementById('reviewDateInput').value;
-      bridgePost('refreshRawData', { dateStr: reviewDate }).then(function (res) {
+
+      function showRetry(parent, label) {
+        var b = el('button', 'btn-primary', label);
+        b.addEventListener('click', function () { b.disabled = true; refreshData(); });
+        parent.appendChild(b);
+      }
+
+      // The backend itself retries the Jotform sync on transient failures
+      // (bounded, see DataSyncBridge.gs), so this single call is not retried
+      // again here - a second client-side attempt would just queue behind the
+      // first one's lock.
+      bridgePost('refreshRawData', { dateStr: reviewDate }, { timeoutMs: TIMEOUTS.refresh, retries: 0 }).then(function (res) {
         clearInterval(tickHandle);
         btn.disabled = false;
         btn.textContent = 'Refresh Data';
@@ -398,10 +571,14 @@
           // from this known transient echo-redirect flakiness by whoever
           // is debugging it, without exposing internals to the operator.
           if (res.debug) console.log('REFRESH_DIAGNOSTIC', JSON.stringify(res.debug));
+          Net.logTech('refreshRawData refused', { kind: Net.classifyBackend(res), errorClass: res.errorClass, message: res.error });
           resultHost.innerHTML = '';
-          resultHost.appendChild(el('div', 'meta report-error', 'Data was not updated. Please try again.'));
+          resultHost.appendChild(el('div', 'meta report-error', 'Could not complete data collection.'));
           resultHost.appendChild(el('div', 'meta progress-estimate-note',
-            String(res.error || '') + (res.retryable ? ' - this is usually transient; trying again in a moment often succeeds.' : '')));
+            (res.errorClass === 'NETWORK' || res.retryable)
+              ? 'The data source did not respond. This is usually temporary - trying again in a moment often succeeds.'
+              : 'The data source reported a problem. Please try again; if it keeps happening, contact the office.'));
+          showRetry(resultHost, 'Retry Data Collection');
           return;
         }
 
@@ -416,17 +593,31 @@
         doneBox.appendChild(el('div', 'meta', 'Last updated: ' + new Date(res.refreshedAt).toLocaleString()));
         resultHost.appendChild(doneBox);
         statusLine.textContent = formatStatusLine(res.rawRowCount, res.refreshedAt);
-      }).catch(function () {
+      }).catch(function (e) {
         clearInterval(tickHandle);
         btn.disabled = false;
         btn.textContent = 'Refresh Data';
+        Net.logTech('refreshRawData transport failure', e);
         // A network-level failure (e.g. the Worker/browser relay timing
         // out) is NOT proof the backend failed - never claim "not
         // updated" here (that asserts a fact we don't actually know),
-        // and never claim success either. Never auto-retry.
+        // and never claim success either. So instead of leaving the person
+        // guessing, ask the status endpoint whether the refresh actually
+        // landed (its "last refresh" time moved) and say what we found.
         resultHost.innerHTML = '';
-        resultHost.appendChild(el('div', 'meta report-slow-notice',
-          'Could not confirm the refresh completed. Check the status above, or try again shortly.'));
+        resultHost.appendChild(el('div', 'meta report-slow-notice', 'Checking whether the refresh completed…'));
+        loadStatus().then(function (s) {
+          resultHost.innerHTML = '';
+          var before = statusBeforeRefresh && statusBeforeRefresh.lastRefreshAt;
+          if (s && s.lastRefreshAt && s.lastRefreshAt !== before) {
+            statusBeforeRefresh = s;
+            resultHost.appendChild(el('div', 'meta', 'The refresh did complete (the connection dropped before the confirmation arrived).'));
+            return;
+          }
+          resultHost.appendChild(el('div', 'meta report-slow-notice',
+            'Could not confirm the refresh completed. ' + Net.userMessage(e && e.kind)));
+          showRetry(resultHost, 'Retry Data Collection');
+        });
       });
     }
     btn.addEventListener('click', refreshData);
@@ -586,7 +777,9 @@
         if (designationInput.value.trim()) payload.designation = designationInput.value.trim();
       }
 
-      bridgePost('generateV5Report', payload).then(function (res) {
+      // Never auto-retried: a report is a real Drive file, a blind repeat
+      // could create a duplicate.
+      bridgePost('generateV5Report', payload, { timeoutMs: TIMEOUTS.report, retries: 0 }).then(function (res) {
         clearInterval(tickHandle);
         btn.disabled = false;
         btn.textContent = 'Generate Report';
