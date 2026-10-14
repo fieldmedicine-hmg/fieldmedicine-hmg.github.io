@@ -104,6 +104,82 @@
     <div id="prResult"></div>
   </div>
 
+  <div class="analytics-section" id="approvalsSection">
+    <div class="section-title">Zone Manager Approvals Report</div>
+    <div class="meta">Every Zone Manager decision (Approved / Modified / Rejected) and every employee-day still Pending or Not Reviewed, with the original attendance, reviewer, timestamps (Asia/Riyadh) and source IDs. Read-only. The Excel file contains exactly the records shown.</div>
+    <div class="filter-bar" id="approvalsFilterBar">
+      <div class="filter-field">
+        <label for="apFromDate">From Date</label>
+        <input type="date" id="apFromDate">
+      </div>
+      <div class="filter-field">
+        <label for="apToDate">To Date</label>
+        <input type="date" id="apToDate">
+      </div>
+      <div class="filter-field">
+        <label for="apZone">Zone</label>
+        <select id="apZone"><option value="">All Zones</option></select>
+      </div>
+      <div class="filter-field">
+        <label for="apReviewer">Zone Manager</label>
+        <select id="apReviewer"><option value="">All Zone Managers</option></select>
+      </div>
+      <div class="filter-field">
+        <label for="apStatus">Approval Status</label>
+        <select id="apStatus">
+          <option value="">All</option>
+          <option value="APPROVED">Approved</option>
+          <option value="MODIFIED">Modified</option>
+          <option value="REJECTED">Rejected</option>
+          <option value="DECIDED">Any decision (completed records)</option>
+          <option value="PENDING">Pending</option>
+          <option value="NOT_REVIEWED">Not Reviewed</option>
+        </select>
+      </div>
+      <div class="filter-field">
+        <label for="apEmployee">Employee (name or code)</label>
+        <input type="text" id="apEmployee" placeholder="e.g. 10234 or Ahmed">
+      </div>
+      <div class="filter-field">
+        <label for="apPeriod">Review Period</label>
+        <select id="apPeriod"><option value="">All Review Periods</option></select>
+      </div>
+      <div class="filter-field">
+        <label for="apReviewType">Review Type</label>
+        <select id="apReviewType"><option value="">All</option><option value="ZONE">Zone</option><option value="DOCTORS">Doctors</option></select>
+      </div>
+      <div class="filter-field checkbox">
+        <input type="checkbox" id="apIncludeTest">
+        <label for="apIncludeTest">Include TEST Data</label>
+      </div>
+      <div class="filter-field">
+        <button id="apLoadBtn" class="btn-primary">Show Report</button>
+        <button id="apExcelBtn" class="btn-secondary" disabled>Download Excel (.xlsx)</button>
+      </div>
+    </div>
+    <div id="apStatusMsg" class="meta" role="status"></div>
+    <div id="apResult" hidden>
+      <div class="meta" id="apScopeLine"></div>
+      <div class="stat-grid" id="apStats"></div>
+      <div class="meta" id="apQuality"></div>
+      <div class="section-title">By Zone Manager</div>
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead><tr><th>Zone Manager</th><th>Type</th><th>Zones</th><th>Links</th><th>Submitted</th><th>Records</th><th>Approved</th><th>Modified</th><th>Rejected</th><th>Pending</th><th>Not Reviewed</th></tr></thead>
+          <tbody id="apReviewerBody"></tbody>
+        </table>
+      </div>
+      <div class="section-title">Approval Details</div>
+      <div class="meta" id="apDetailNote"></div>
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead><tr><th>Work Date</th><th>Zone</th><th>Employee</th><th>Code</th><th>Designation</th><th>Check-in</th><th>Check-out</th><th>System Status</th><th>Approval</th><th>Final Status</th><th>Reason</th><th>Zone Manager</th><th>Decided At</th><th>Review Period</th><th>Link Status</th><th>Note</th></tr></thead>
+          <tbody id="apDetailBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <div id="statusMsg" class="meta"></div>
   <div id="resultsHost" hidden>
 
@@ -166,6 +242,8 @@
   </div>
 </div>
 <script src="net.js"></script>
+<script src="xlsx.js"></script>
+<script src="approvals-export.js"></script>
 <script src="period-analytics.js"></script>
 </body>
 </html>

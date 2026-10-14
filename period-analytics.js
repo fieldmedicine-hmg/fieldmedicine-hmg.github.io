@@ -465,6 +465,150 @@
     document.getElementById('prGenerateExcelBtn').addEventListener('click', function () { generatePeriodReport('excel'); });
   })();
 
+  // ================== ZONE MANAGER APPROVALS REPORT (2026-10-14) ==================
+  // Read-only. Rides on the SAME credential and the same allow-listed
+  // periodAnalytics / periodAnalyticsViaDevice actions as Load (report=approvals);
+  // every filter is applied server-side. The Excel file is built in this
+  // browser from the exact response on screen (xlsx.js + approvals-export.js),
+  // so the file can never disagree with the report and no file is left in
+  // anyone's Drive. The download is only offered for the filters last shown.
+  (function initApprovalsReport() {
+    var DETAIL_SHOWN_MAX = 500;
+    var ids = ['apFromDate', 'apToDate', 'apZone', 'apReviewer', 'apStatus', 'apEmployee', 'apPeriod', 'apReviewType', 'apIncludeTest'];
+    var $ = function (id) { return document.getElementById(id); };
+    var loadBtn = $('apLoadBtn'), excelBtn = $('apExcelBtn'), msg = $('apStatusMsg');
+    var lastReport = null;
+
+    function localIso(d) { return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); }
+    (function defaults() {
+      var today = new Date();
+      $('apToDate').value = localIso(today);
+      $('apFromDate').value = localIso(new Date(today.getFullYear(), today.getMonth(), today.getDate() - 6));
+    })();
+
+    function fillOptions(select, items, current, valueOf, labelOf) {
+      var placeholder = select.options[0];
+      select.innerHTML = '';
+      select.appendChild(placeholder);
+      items.forEach(function (it) {
+        var opt = document.createElement('option');
+        opt.value = valueOf(it); opt.textContent = labelOf(it);
+        select.appendChild(opt);
+      });
+      // keep a chosen value even if the new data no longer lists it, so the filter shown is the filter applied
+      if (current && !items.some(function (it) { return valueOf(it) === current; })) {
+        var keep = document.createElement('option'); keep.value = current; keep.textContent = current; select.appendChild(keep);
+      }
+      select.value = current || '';
+    }
+    function same(x) { return x; }
+
+    function staleNotice() {
+      if (!lastReport) return;
+      excelBtn.disabled = true;
+      msg.textContent = 'Filters changed - press Show Report to refresh before downloading the Excel file.';
+    }
+    ids.forEach(function (id) { $(id).addEventListener(id === 'apEmployee' ? 'input' : 'change', staleNotice); });
+
+    function isAuthFailure(error) { return /device credential|deactivated|not authorized|access token/i.test(String(error || '')); }
+
+    function render(rep) {
+      var s = rep.summary;
+      $('apScopeLine').textContent = 'Work dates ' + rep.fromDate + ' to ' + rep.toDate + ' · Filters: ' + window.HMGApprovalsExport.filterLabel(rep.filters) +
+        ' · Generated ' + rep.generatedAt + ' (' + rep.timeZone + ')';
+      var stats = $('apStats'); stats.innerHTML = '';
+      [['Total Records', s.totalRecords], ['Approved', s.approved], ['Modified', s.modified], ['Rejected', s.rejected], ['Decided', s.decided],
+        ['Pending', s.pending], ['Not Reviewed', s.notReviewed], ['In Submitted Reviews', s.recordsInSubmittedReviews], ['Employees', s.employees],
+        ['Review Links', s.links.total], ['Links Completed', s.links.completed]].forEach(function (p) { stats.appendChild(statBox(p[0], p[1])); });
+      var q = [];
+      if (s.duplicateDecisionRows) q.push(s.duplicateDecisionRows + ' duplicate decision row(s)');
+      if (s.decisionsWithoutLink) q.push(s.decisionsWithoutLink + ' decision(s) with no matching review link');
+      if (s.decisionsWithoutAttendance) q.push(s.decisionsWithoutAttendance + ' decision(s) with no matching attendance row');
+      if (s.otherDecision) q.push(s.otherDecision + ' unrecognised decision value(s)');
+      $('apQuality').textContent = (q.length ? 'Data checks (all rows still listed, see Note column): ' + q.join(' · ') + '. ' : 'Data checks: no duplicates or unmatched decisions. ') +
+        (s.excludedTestRecords ? s.excludedTestRecords + ' test record(s) excluded.' : '');
+
+      var rb = $('apReviewerBody'); rb.innerHTML = '';
+      if (!rep.reviewers.length) { var tr0 = el('tr'); var c0 = el('td', 'empty-note', 'No records for these filters.'); c0.colSpan = 11; tr0.appendChild(c0); rb.appendChild(tr0); }
+      rep.reviewers.forEach(function (r) {
+        var tr = el('tr');
+        [r.reviewer, r.reviewTypes, r.zones, r.links, r.submittedLinks, r.records, r.approved, r.modified, r.rejected, r.pending, r.notReviewed].forEach(function (v) { tr.appendChild(td(v)); });
+        rb.appendChild(tr);
+      });
+
+      var c = function (name) { return rep.columns.indexOf(name); };
+      var show = ['Work Date', 'Zone', 'Employee Name', 'Employee Code', 'Designation', 'Check-in', 'Check-out', 'System Attendance Status', 'Approval Status',
+        'Final Status', 'Manager Comment / Reason', 'Zone Manager', 'Decided At', 'Review Period', 'Review Link Status', 'Data Note'].map(c);
+      var body = $('apDetailBody'); body.innerHTML = '';
+      if (!rep.rows.length) { var trE = el('tr'); var cE = el('td', 'empty-note', 'No records for these filters.'); cE.colSpan = 16; trE.appendChild(cE); body.appendChild(trE); }
+      rep.rows.slice(0, DETAIL_SHOWN_MAX).forEach(function (row) {
+        var tr = el('tr');
+        show.forEach(function (i) {
+          var v = row[i];
+          if (i === c('Approval Status')) { var cell = el('td'); cell.appendChild(el('span', 'tag tag-' + (v === 'NOT_REVIEWED' ? 'EXPIRED' : v), v)); tr.appendChild(cell); return; }
+          tr.appendChild(td(v));
+        });
+        body.appendChild(tr);
+      });
+      $('apDetailNote').textContent = rep.rows.length > DETAIL_SHOWN_MAX
+        ? 'Showing the first ' + DETAIL_SHOWN_MAX + ' of ' + rep.rows.length + ' records - the Excel file contains all ' + rep.rows.length + '.'
+        : rep.rows.length + ' record(s).';
+      $('apResult').hidden = false;
+    }
+
+    loadBtn.addEventListener('click', function () {
+      var cred = activeCredential_();
+      if (!cred) { msg.textContent = 'Access required - open this page using your Period Analytics access link, or enroll this device.'; return; }
+      var from = $('apFromDate').value, to = $('apToDate').value;
+      if (!from || !to) { msg.textContent = 'Pick both a From and To date.'; return; }
+      if (from > to) { msg.textContent = 'From Date must be on or before To Date.'; return; }
+      var payload = {
+        report: 'approvals', fromDate: from, toDate: to,
+        zone: $('apZone').value, reviewer: $('apReviewer').value, status: $('apStatus').value, employee: $('apEmployee').value.trim(),
+        assignmentId: $('apPeriod').value, reviewType: $('apReviewType').value, includeTest: $('apIncludeTest').checked ? 'true' : 'false',
+      };
+      if (cred.kind === 'admin') payload.adminToken = cred.value; else payload.deviceToken = cred.value;
+      Object.keys(payload).forEach(function (k) { if (payload[k] === '') delete payload[k]; });
+      loadBtn.disabled = true; excelBtn.disabled = true; lastReport = null;
+      var stopTicker = startElapsedTicker_(msg, 'Loading approvals…');
+      bridgePost(cred.kind === 'admin' ? 'periodAnalytics' : 'periodAnalyticsViaDevice', payload).then(function (rep) {
+        stopTicker(); loadBtn.disabled = false;
+        if (!rep.ok) {
+          msg.textContent = 'Error: ' + rep.error;
+          if (cred.kind === 'device' && isAuthFailure(rep.error)) { clearDeviceToken_(); DEVICE_TOKEN = ''; applyAccessGate_(); }
+          return;
+        }
+        if (rep.report !== 'approvals' || !Array.isArray(rep.rows)) { msg.textContent = 'Error: the server did not return the approvals report (it may not be deployed yet).'; return; }
+        lastReport = rep;
+        fillOptions($('apZone'), rep.options.zones, $('apZone').value, same, same);
+        fillOptions($('apReviewer'), rep.options.reviewers, $('apReviewer').value, same, same);
+        fillOptions($('apPeriod'), rep.options.periods, $('apPeriod').value, function (p) { return p.assignmentId; }, function (p) { return p.label; });
+        render(rep);
+        msg.textContent = 'Loaded ' + rep.summary.totalRecords + ' record(s).';
+        excelBtn.disabled = false;
+      }).catch(function (e) {
+        stopTicker(); loadBtn.disabled = false;
+        msg.textContent = 'Network error: ' + (e && e.message ? e.message : 'request failed') + ' - nothing was changed; try again.';
+      });
+    });
+
+    excelBtn.addEventListener('click', function () {
+      if (!lastReport) return;
+      try {
+        var bytes = window.HMGXlsx.build(window.HMGApprovalsExport.workbookSheets(lastReport));
+        var blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = window.HMGApprovalsExport.fileName(lastReport);
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(function () { URL.revokeObjectURL(a.href); }, 60000);
+        msg.textContent = 'Excel file created: ' + a.download + ' (' + lastReport.rows.length + ' records).';
+      } catch (err) {
+        msg.textContent = 'Could not build the Excel file: ' + (err && err.message ? err.message : err);
+      }
+    });
+  })();
+
   // UX-only gate (see the real checks inside load()/generatePeriodReport())
   // - reflects whichever credential (if any) this page load actually has,
   // and shows/hides the "generate an enrollment link" section, which only
@@ -477,6 +621,8 @@
     document.getElementById('loadBtn').disabled = !hasAccess;
     document.getElementById('prGeneratePdfBtn').disabled = !hasAccess;
     document.getElementById('prGenerateExcelBtn').disabled = !hasAccess;
+    document.getElementById('apLoadBtn').disabled = !hasAccess;
+    if (!hasAccess) document.getElementById('apExcelBtn').disabled = true;
     document.getElementById('deviceEnrollSection').hidden = !(cred && cred.kind === 'admin');
     if (!hasAccess) {
       setMsg('Access required - open this page using your Period Analytics access link, or enroll this device from the Control Center. No data is available without it.');
