@@ -46,6 +46,9 @@
           decisions.push([c.date, c.zone, e.code, e.name, i + 1, o.name, o.managerId, o.role, o.decision, o.comment, o.decidedAt, e.agreement, e.officialDecision, e.approvalState, ver]);
         });
       });
+      (c.orphanDecisions || []).forEach(function (o) {
+        unmatched.push([c.date, c.zone, 'ORPHAN DECISION', '', o.code, o.name, o.decision, 'Official decision by ' + (o.reviewer || '—') + ' at ' + o.decidedAt + ' (Review ID ' + o.reviewId + ') has no attendance record - not counted, nothing fabricated', ver]);
+      });
       info.push([c.date, c.zone, c.zoneId, r.status, r.version || '', r.reportId || '', r.generatedAt, r.generatedBy, r.hash, r.integrityOk === false ? 'FAILED' : 'OK',
         r.liveChanged ? 'YES - live data changed after finalization; this sheet shows the issued FINAL figures' : 'NO', c.config.version, c.config.effectiveFrom, c.config.toleranceMin,
         c.config.totalBasis, c.managers.map(function (m) { return m.name + ' (' + m.role + (m.required ? ', required' : '') + ')'; }).join('; ') || 'legacy single reviewer',
