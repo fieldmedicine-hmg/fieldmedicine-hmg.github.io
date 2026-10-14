@@ -178,19 +178,20 @@
     renderSupplements(res);
   }
   /** One consolidated list of the inputs the owner still has to provide for this date (nothing is guessed). */
+  function mode0(c) { return c.config.mode; }
   function renderMissing(res) {
     var host = $('zoHost'), items = [];
     shown(res).forEach(function (z) {
       var c = z.content, need = [];
       if (!c.config.configured) need.push('configuration: ' + c.config.errors.join('; '));
-      if (!c.target && z.report.status !== 'FINAL') need.push('daily staffing target for ' + res.date);
+      if (!c.target && z.report.status !== 'FINAL') need.push('staffing target for ' + res.date + (mode0(c) === 'MORNING_NIGHT' ? ' (morning + night)' : ' (daily)'));
       if (c.managerError) need.push('manager assignment: ' + c.managerError);
       if ((c.config.warnings || []).length) need.push('Settings: ' + c.config.warnings.join('; '));
       if (need.length) items.push(c.zone + ' - ' + need.join(' · '));
     });
     if (!items.length) { host.appendChild(el('div', 'meta', 'All shown zones have a complete configuration and a target for ' + fmtDay(res.date) + '.')); return; }
     var box = el('div', 'notice'); box.id = 'zoMissing';
-    box.appendChild(el('div', null, 'Inputs still required (' + items.length + ' zone(s)) - configure with "Configure", enter targets in the grid and press Save targets (or Copy previous day):'));
+    box.appendChild(el('div', null, 'Inputs still required (' + items.length + ' zone(s)) - enter them in the Operational_Inputs Google Sheet (one row per missing value), or here: targets in the grid + Save targets:'));
     var ul = el('ul'); items.forEach(function (t) { ul.appendChild(el('li', null, t)); }); box.appendChild(ul);
     host.appendChild(box);
   }
