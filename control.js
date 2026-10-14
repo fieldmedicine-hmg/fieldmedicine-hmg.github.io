@@ -84,6 +84,11 @@
   function groupLabel(card) {
     return card.reviewType === 'DOCTORS' ? 'DOCTORS' : card.zone.toUpperCase();
   }
+  // PHASE 6: a zone with several assigned managers shows one card per manager (each with its own independent link).
+  var ROLE_LABEL = { PRIMARY: 'Primary Manager', SECONDARY: 'Co-Manager', TRAINING: 'Incoming / Training Manager' };
+  function cardTitle(card) {
+    return groupLabel(card) + (card.managerRole ? ' — ' + (ROLE_LABEL[card.managerRole] || card.managerRole) : '');
+  }
   // City is organizational/reporting metadata only (never a routing input) -
   // Doctors spans every zone, so it shows "All Zones" in the same spot a
   // Zone card shows its city.
@@ -94,6 +99,7 @@
     return card.count + (card.reviewType === 'DOCTORS' ? (card.count === 1 ? ' Doctor' : ' Doctors') : (card.count === 1 ? ' Employee' : ' Employees'));
   }
   function reviewerLabel(card) {
+    if (card.managerRole) return (ROLE_LABEL[card.managerRole] || 'Manager') + (card.managerId ? ' [' + card.managerId + ']' : '');
     return card.reviewType === 'DOCTORS' ? 'Reviewer' : 'Zone Manager';
   }
 
@@ -281,7 +287,10 @@
         if (!data || !current()) return;
         renderSummary(data, from, to);
         var host = byId('cardsHost');
-        data.cards.forEach(function (card) { host.appendChild(renderGroupCard(card, { from: from, to: to })); });
+        data.cards.forEach(function (card) {
+          host.appendChild(renderGroupCard(card, { from: from, to: to }));
+          (card.extraManagers || []).forEach(function (m) { host.appendChild(renderGroupCard(m, { from: from, to: to })); });
+        });
         stage('Ready.');
         console.log('TIMING processAttendance ' + (Date.now() - t0) + 'ms days=' + v.days + ' rebuilt=' + rebuilt.length);
         auditEvent('PERIOD_PROCESS_COMPLETED', from, to, 'employees ' + data.summary.employees + ', zones ' + data.summary.zones + ', doctors ' + data.summary.doctors + ', unmapped ' + data.summary.unmapped + ', rebuilt days ' + rebuilt.length);
@@ -370,6 +379,7 @@
     var p = { reviewDate: ctx.from, reviewType: card.reviewType };
     if (ctx.to !== ctx.from) p.toDate = ctx.to; // a one-day period sends exactly what the legacy flow always sent
     if (card.reviewType === 'ZONE') p.zone = card.zone;
+    if (card.managerId && card.managerRole && card.managerRole !== 'PRIMARY') p.managerId = card.managerId; // PHASE 6: that manager's own link
     return Object.assign(p, extra || {});
   }
 
@@ -385,14 +395,16 @@
   }
 
   function renderGroupCard(card, ctx) {
-    var box = el('div', 'control-card');
-    box.appendChild(el('div', 'group-title', groupLabel(card)));
+    var box = el('div', 'control-card' + (card.managerRole && card.managerRole !== 'PRIMARY' ? ' control-card-sub' : ''));
+    box.appendChild(el('div', 'group-title', cardTitle(card)));
+    if (card.approvalPolicy) box.appendChild(el('div', 'meta', 'Approval policy: ' + card.approvalPolicy.replace(/_/g, ' ') + ' · ' + (1 + (card.extraManagers || []).length) + ' assigned managers - each reviews independently'));
+    if (card.managerRole === 'TRAINING' && !card.managerRequired) box.appendChild(el('div', 'meta', 'Opinion is recorded and compared; it does not block the official approval.'));
     box.appendChild(el('div', 'meta', scopeLine(card)));
     box.appendChild(el('div', 'meta', countLabel(card) + (card.days ? ' · ' + card.days + (card.days === 1 ? ' day' : ' days') : '')));
 
     if (card.routingError) {
       box.appendChild(el('div', 'meta', reviewerLabel(card) + ': —'));
-      box.appendChild(el('div', 'routing-error', card.routingError.indexOf('ambiguity') !== -1 ? 'Routing ambiguity' : 'Reviewer not configured'));
+      box.appendChild(el('div', 'routing-error', card.routingError.indexOf('ambiguity') !== -1 ? 'Routing ambiguity' : (/^Manager assignment error/.test(card.routingError) ? card.routingError : 'Reviewer not configured')));
       return box;
     }
 
@@ -561,7 +573,7 @@
       if (isBusy()) return;
       clearChildren(confirmHost);
       var panel = el('div', 'confirm-box');
-      panel.appendChild(el('div', 'group-title', 'Generate a new review link for ' + (card.reviewer || 'this reviewer') + ' / ' + groupLabel(card) + '?'));
+      panel.appendChild(el('div', 'group-title', 'Generate a new review link for ' + (card.reviewer || 'this reviewer') + ' / ' + cardTitle(card) + '?'));
       panel.appendChild(el('div', 'meta', 'The current link will stop working immediately. Decisions already saved are kept.'));
       var cancel = el('button', 'btn-secondary', 'Cancel');
       cancel.addEventListener('click', function () { clearChildren(confirmHost); });

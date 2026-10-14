@@ -43,6 +43,41 @@
     <div id="cardsHost"></div>
   </div>
 
+  <div class="analytics-section" id="zoneOpsSection">
+    <div class="section-title">Zone Operations &mdash; Daily Targets, Compliance &amp; Zone Reports</div>
+    <div class="meta" id="zoAccess"></div>
+    <div class="filter-bar">
+      <div class="filter-field">
+        <label for="zoDate">Operational Date</label>
+        <input type="date" id="zoDate">
+      </div>
+      <div class="filter-field"><button id="zoLoadBtn" class="btn-primary">Load</button></div>
+      <div class="filter-field"><button id="zoSaveBtn" class="btn-primary">Save Targets</button></div>
+      <div class="filter-field"><button id="zoCopyPrevBtn" class="btn-secondary">Copy Previous Day</button></div>
+      <div class="filter-field"><button id="zoAllReportBtn" class="btn-secondary">All Zones: PDF + Excel</button></div>
+      <div class="filter-field"><button id="zoAllExcelBtn" class="btn-secondary">All Zones: Excel</button></div>
+    </div>
+    <div id="zoStatus" class="meta" role="status"></div>
+    <div id="zoHost"></div>
+    <div id="zoDetail"></div>
+    <div class="section-title">Supplementary Attendance (missing fingerprint)</div>
+    <div class="meta">Recorded separately from biometric data; it appears in the manager's review link and counts only after the manager approves it.</div>
+    <div class="filter-bar">
+      <div class="filter-field"><label for="zoSuppZone">Zone</label><select id="zoSuppZone"></select></div>
+      <div class="filter-field"><label for="zoSuppCode">Employee Code</label><input type="text" id="zoSuppCode" maxlength="40"></div>
+      <div class="filter-field"><label for="zoSuppName">Employee Name</label><input type="text" id="zoSuppName" maxlength="80"></div>
+      <div class="filter-field"><label for="zoSuppDesig">Designation</label>
+        <select id="zoSuppDesig"><option value="Paramedic">Paramedic</option><option value="Nurse">Nurse</option><option value="Doctors">Doctors</option></select></div>
+      <div class="filter-field"><label for="zoSuppShift">Shift (optional)</label><input type="text" id="zoSuppShift" maxlength="40"></div>
+      <div class="filter-field"><label for="zoSuppIn">Claimed Check-in</label><input type="time" id="zoSuppIn"></div>
+      <div class="filter-field"><label for="zoSuppOut">Claimed Check-out</label><input type="time" id="zoSuppOut"></div>
+      <div class="filter-field checkbox"><input type="checkbox" id="zoSuppNext"><label for="zoSuppNext">Check-out next day</label></div>
+      <div class="filter-field"><label for="zoSuppReason">Reason</label><input type="text" id="zoSuppReason" maxlength="500"></div>
+      <div class="filter-field"><button id="zoSuppSubmitBtn" class="btn-primary">Submit Claim</button></div>
+    </div>
+    <div id="zoSuppList"></div>
+  </div>
+
   <div class="analytics-section">
     <div class="section-title">Reports</div>
     <div id="reportsForm" class="filter-bar" hidden>
@@ -101,6 +136,9 @@
 
 </div>
 <script src="net.js"></script>
+<script src="xlsx.js"></script>
+<script src="zone-ops-export.js"></script>
+<script src="zone-ops.js"></script>
 <script src="control.js"></script>
 </body>
 </html>
