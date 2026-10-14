@@ -23,7 +23,9 @@
   function call(op, extra) {
     var cred = credential();
     if (!cred) return Promise.resolve({ ok: false, error: 'Access required - enroll this device in Period Analytics first.' });
-    var body = Object.assign({ action: cred.kind === 'admin' ? 'periodAnalytics' : 'periodAnalyticsViaDevice', op: op, date: $('zoDate').value }, extra || {});
+    var d = $('zoDate').value;
+    // the Worker validates fromDate/toDate on this action (measured on production), so every operation carries them
+    var body = Object.assign({ action: cred.kind === 'admin' ? 'periodAnalytics' : 'periodAnalyticsViaDevice', op: op, date: d, fromDate: d, toDate: d }, extra || {});
     if (cred.kind === 'admin') body.adminToken = cred.value; else body.deviceToken = cred.value;
     return window.HMGNet.postJson(WRITE_BRIDGE, body, { timeoutMs: TIMEOUT_MS }).then(function (r) { return r || { ok: false, error: 'Empty response.' }; },
       function (e) { return { ok: false, error: 'Network error: ' + (e && e.message ? e.message : 'request failed') + ' - nothing was changed; try again.' }; });
