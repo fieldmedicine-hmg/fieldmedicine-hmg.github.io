@@ -396,7 +396,7 @@
 
   function renderGroupCard(card, ctx) {
     var box = el('div', 'control-card' + (card.managerRole && card.managerRole !== 'PRIMARY' ? ' control-card-sub' : ''));
-    box.appendChild(el('div', 'group-title', cardTitle(card)));
+    box.appendChild(el('div', 'group-title', card.existingLink ? 'Existing review link · ' + periodPlain(ctx.from, ctx.to) : cardTitle(card)));
     if (card.approvalPolicy) box.appendChild(el('div', 'meta', 'Approval policy: ' + card.approvalPolicy.replace(/_/g, ' ') + ' · ' + (1 + (card.extraManagers || []).length) + ' assigned managers - each reviews independently'));
     if (card.managerRole === 'TRAINING' && !card.managerRequired) box.appendChild(el('div', 'meta', 'Opinion is recorded and compared; it does not block the official approval.'));
     box.appendChild(el('div', 'meta', scopeLine(card)));
@@ -444,8 +444,15 @@
 
       if (card.status === 'NONE') {
         if (card.blockedBy && card.blockedBy.length) {
+          // PHASE 7: an overlap is real protection (two live links would write the SAME employee-day decisions), so no second
+          // link is created. Instead the EXISTING link is shown with its own actions, for its own period.
           var b0 = card.blockedBy[0];
-          linkHost.appendChild(el('div', 'notice', 'A live review link (' + periodPlain(b0.from, b0.to) + ', ' + b0.status.replace('_', ' ') + ') already covers part of this period for this group. Finish or regenerate that review, or choose a period that does not overlap it.'));
+          linkHost.appendChild(el('div', 'notice', 'This period overlaps an existing live review link for this group (' + periodPlain(b0.from, b0.to) + ', ' + b0.status.replace('_', ' ') +
+            '). A second link would write the same employee-day decisions, so none is created. Use the existing link below (its decisions are kept), or choose a period that does not overlap it.'));
+          linkHost.appendChild(renderGroupCard(Object.assign({}, card, {
+            status: b0.status, managerUrl: b0.managerUrl, reviewer: b0.reviewer || card.reviewer, whatsapp: b0.whatsapp || card.whatsapp, reissueCount: b0.reissueCount || 1,
+            expiresAt: b0.expiresAt, lastResentAt: b0.lastResentAt, assignmentId: b0.assignmentId, blockedBy: null, extraManagers: null, approvalPolicy: null,
+            periodFrom: b0.from, periodTo: b0.to, existingLink: true }), { from: b0.from, to: b0.to }));
           return;
         }
         var gen = el('button', 'btn-primary', 'Generate Review Link');

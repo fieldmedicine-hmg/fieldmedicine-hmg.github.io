@@ -45,37 +45,83 @@
 
   <div class="analytics-section" id="zoneOpsSection">
     <div class="section-title">Zone Operations &mdash; Daily Targets, Compliance &amp; Zone Reports</div>
-    <div class="meta" id="zoAccess"></div>
+    <div class="zo-steps">1. Access &rarr; 2. Operational date &rarr; 3. Load zones &rarr; 4. Configure zones &amp; daily targets &rarr; 5. Review compliance &rarr; 6. Reports (PDF / Excel) &rarr; 7. Finalize</div>
+
+    <div class="access-panel" id="zoAccessPanel">
+      <div><b>1. Access</b> &nbsp;<span id="zoAccessState" class="access-state access-CHECKING">CHECKING&hellip;</span> <span id="zoAccessWho" class="meta"></span></div>
+      <div id="zoAccessDetail" class="meta" role="status"></div>
+      <div class="row-actions">
+        <button id="zoCheckAccessBtn" class="btn-secondary">Check access</button>
+        <button id="zoSignInBtn" class="btn-primary">Sign in with access link</button>
+        <button id="zoEnrollBtn" class="btn-primary">Remember this device</button>
+        <button id="zoForgetBtn" class="btn-secondary">Forget this device</button>
+        <a href="period-analytics.html" id="zoOpenPA">Open Period Analytics &rarr;</a>
+      </div>
+      <div id="zoSignInBox" hidden>
+        <div class="filter-bar">
+          <div class="filter-field zo-wide"><label for="zoAccessLink">Paste your personal access link (the &ldquo;Analytics Access Link&rdquo; you received)</label>
+            <input type="text" id="zoAccessLink" autocomplete="off" spellcheck="false" placeholder="https://fieldmedicine-hmg.github.io/control.html?adminToken=..."></div>
+          <div class="filter-field"><button id="zoUseLinkBtn" class="btn-primary">Use this link</button></div>
+        </div>
+        <div class="meta">Or simply open the link itself. The link is used only on this page and is never stored; press &ldquo;Remember this device&rdquo; afterwards so this browser keeps access (the owner can revoke it at any time).</div>
+      </div>
+    </div>
+
     <div class="filter-bar">
       <div class="filter-field">
-        <label for="zoDate">Operational Date</label>
+        <label for="zoDate">2. Operational Date (one day)</label>
         <input type="date" id="zoDate">
       </div>
-      <div class="filter-field"><button id="zoLoadBtn" class="btn-primary">Load</button></div>
-      <div class="filter-field"><button id="zoSaveBtn" class="btn-primary">Save Targets</button></div>
-      <div class="filter-field"><button id="zoCopyPrevBtn" class="btn-secondary">Copy Previous Day</button></div>
-      <div class="filter-field"><button id="zoAllReportBtn" class="btn-secondary">All Zones: PDF + Excel</button></div>
-      <div class="filter-field"><button id="zoAllExcelBtn" class="btn-secondary">All Zones: Excel</button></div>
+      <div class="filter-field"><button id="zoTodayBtn" class="btn-secondary">Today</button></div>
+      <div class="filter-field"><button id="zoYesterdayBtn" class="btn-secondary">Yesterday</button></div>
+      <div class="filter-field"><button id="zoUsePeriodBtn" class="btn-secondary" hidden>Use review period end</button></div>
+      <div class="filter-field">
+        <label for="zoZone">Zone</label>
+        <select id="zoZone"><option value="">All zones</option></select>
+      </div>
+      <div class="filter-field"><button id="zoLoadBtn" class="btn-primary">3. Load zones</button></div>
     </div>
+    <div id="zoDateLabel" class="meta"></div>
     <div id="zoStatus" class="meta" role="status"></div>
     <div id="zoHost"></div>
-    <div id="zoDetail"></div>
-    <div class="section-title">Supplementary Attendance (missing fingerprint)</div>
-    <div class="meta">Recorded separately from biometric data; it appears in the manager's review link and counts only after the manager approves it.</div>
-    <div class="filter-bar">
-      <div class="filter-field"><label for="zoSuppZone">Zone</label><select id="zoSuppZone"></select></div>
-      <div class="filter-field"><label for="zoSuppCode">Employee Code</label><input type="text" id="zoSuppCode" maxlength="40"></div>
-      <div class="filter-field"><label for="zoSuppName">Employee Name</label><input type="text" id="zoSuppName" maxlength="80"></div>
-      <div class="filter-field"><label for="zoSuppDesig">Designation</label>
-        <select id="zoSuppDesig"><option value="Paramedic">Paramedic</option><option value="Nurse">Nurse</option><option value="Doctors">Doctors</option></select></div>
-      <div class="filter-field"><label for="zoSuppShift">Shift (optional)</label><input type="text" id="zoSuppShift" maxlength="40"></div>
-      <div class="filter-field"><label for="zoSuppIn">Claimed Check-in</label><input type="time" id="zoSuppIn"></div>
-      <div class="filter-field"><label for="zoSuppOut">Claimed Check-out</label><input type="time" id="zoSuppOut"></div>
-      <div class="filter-field checkbox"><input type="checkbox" id="zoSuppNext"><label for="zoSuppNext">Check-out next day</label></div>
-      <div class="filter-field"><label for="zoSuppReason">Reason</label><input type="text" id="zoSuppReason" maxlength="500"></div>
-      <div class="filter-field"><button id="zoSuppSubmitBtn" class="btn-primary">Submit Claim</button></div>
+    <div class="row-actions">
+      <button id="zoSaveBtn" class="btn-primary">4. Save Targets</button>
+      <button id="zoCopyPrevBtn" class="btn-secondary">Copy Previous Day</button>
     </div>
-    <div id="zoSuppList"></div>
+    <div id="zoDetail"></div>
+
+    <div class="zo-sub">
+      <div class="section-title">6. Zone Reports &mdash; PDF and Excel</div>
+      <div class="filter-bar">
+        <div class="filter-field"><label for="zoRepFrom">From Date</label><input type="date" id="zoRepFrom"></div>
+        <div class="filter-field"><label for="zoRepTo">To Date</label><input type="date" id="zoRepTo"></div>
+        <div class="filter-field"><button id="zoRepSameBtn" class="btn-secondary">Same as operational date</button></div>
+        <div class="filter-field"><label for="zoRepZone">Zone</label><select id="zoRepZone"><option value="">All zones</option></select></div>
+        <div class="filter-field"><button id="zoRepPdfBtn" class="btn-primary">Download PDF + Excel</button></div>
+        <div class="filter-field"><button id="zoRepXlsxBtn" class="btn-secondary">Download Excel only</button></div>
+      </div>
+      <div id="zoRepNote" class="meta"></div>
+      <div class="meta">One request builds both files from the same snapshot. A zone report is DRAFT until it is finalized for its day (step 7, "Finalize" in the zone's row).</div>
+    </div>
+
+    <div class="zo-sub">
+      <div class="section-title">Supplementary Attendance (missing fingerprint)</div>
+      <div class="meta">Recorded separately from biometric data; it appears in the manager's review link and counts only after the manager approves it. <span id="zoSuppDateLabel"></span></div>
+      <div class="filter-bar">
+        <div class="filter-field"><label for="zoSuppZone">Zone</label><select id="zoSuppZone"></select></div>
+        <div class="filter-field"><label for="zoSuppCode">Employee Code</label><input type="text" id="zoSuppCode" maxlength="40"></div>
+        <div class="filter-field"><label for="zoSuppName">Employee Name</label><input type="text" id="zoSuppName" maxlength="80"></div>
+        <div class="filter-field"><label for="zoSuppDesig">Designation</label>
+          <select id="zoSuppDesig"><option value="Paramedic">Paramedic</option><option value="Nurse">Nurse</option><option value="Doctors">Doctors</option></select></div>
+        <div class="filter-field"><label for="zoSuppShift">Shift (optional)</label><input type="text" id="zoSuppShift" maxlength="40"></div>
+        <div class="filter-field"><label for="zoSuppIn">Claimed Check-in</label><input type="time" id="zoSuppIn"></div>
+        <div class="filter-field"><label for="zoSuppOut">Claimed Check-out</label><input type="time" id="zoSuppOut"></div>
+        <div class="filter-field checkbox"><input type="checkbox" id="zoSuppNext"><label for="zoSuppNext">Check-out next day</label></div>
+        <div class="filter-field"><label for="zoSuppReason">Explanation</label><input type="text" id="zoSuppReason" maxlength="500"></div>
+        <div class="filter-field"><button id="zoSuppSubmitBtn" class="btn-primary">Submit Claim</button></div>
+      </div>
+      <div id="zoSuppList"></div>
+    </div>
   </div>
 
   <div class="analytics-section">
@@ -138,6 +184,7 @@
 <script src="net.js"></script>
 <script src="xlsx.js"></script>
 <script src="zone-ops-export.js"></script>
+<script src="access.js"></script>
 <script src="zone-ops.js"></script>
 <script src="control.js"></script>
 </body>

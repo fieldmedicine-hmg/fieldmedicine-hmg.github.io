@@ -285,7 +285,9 @@
         // this cached token is no longer good for anything - drop it
         // rather than silently retrying with it forever. The permanent
         // admin token is never cleared this way; it isn't stored at all.
-        if (cred.kind === 'device') { clearDeviceToken_(); DEVICE_TOKEN = ''; applyAccessGate_(); }
+        // 2026-10-14 fix: only a DEFINITIVE rejection removes the enrollment (it used to be wiped by ANY failed request,
+        // e.g. one transient 'Unexpected backend response' - the cause of enrolled browsers silently losing access).
+        if (cred.kind === 'device' && window.HMGAccess && window.HMGAccess.classify(data.error, 'device').definitive) { clearDeviceToken_(); DEVICE_TOKEN = ''; applyAccessGate_(); }
         return;
       }
       setMsg('');
@@ -420,7 +422,9 @@
         if (!res.ok) {
           resultHost.innerHTML = '';
           resultHost.appendChild(el('div', 'meta report-error', 'Error: ' + res.error));
-          if (cred.kind === 'device') { clearDeviceToken_(); DEVICE_TOKEN = ''; applyAccessGate_(); }
+          // 2026-10-14 fix: only a DEFINITIVE rejection removes the enrollment (it used to be wiped by ANY failed request,
+        // e.g. one transient 'Unexpected backend response' - the cause of enrolled browsers silently losing access).
+        if (cred.kind === 'device' && window.HMGAccess && window.HMGAccess.classify(res.error, 'device').definitive) { clearDeviceToken_(); DEVICE_TOKEN = ''; applyAccessGate_(); }
           return;
         }
 

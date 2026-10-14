@@ -179,6 +179,7 @@
 
       var metaLine = el('div', 'meta', [r.designation, r.event, 'Check-in ' + r.checkin, 'Check-out ' + r.checkout, r.status].join(' · '));
       card.appendChild(metaLine);
+      if (r.hours) renderHours(card, r, data);
 
       if (r.decision === 'PENDING' && !data.completed) {
         var actions = el('div', 'row-actions');
@@ -222,6 +223,48 @@
 
       app.appendChild(bulkBar);
     }
+  }
+
+  // PHASE 7: working hours vs the zone's required hours (computed by the server from the zone configuration). An hours
+  // exception (short / excess / overtime beyond the tolerance) needs the manager's explanation; approving the explanation
+  // never makes the hours compliant, and it is separate from the attendance decision above.
+  function renderHours(card, r, data) {
+    var h = r.hours;
+    var cls = h.status === 'MATCHED' ? 'hours-ok' : (h.status === 'UNMATCHED' ? 'hours-bad' : 'meta');
+    var line = el('div', 'meta ' + cls, 'Hours ' + (h.actual || '—') + ' / required ' + (h.required || '—') + (h.variance ? ' (' + h.variance + ')' : '') + ' · ' +
+      (h.status === 'UNMATCHED' ? 'UNMATCHED - ' + String(h.category || '').replace('_', ' ') : h.status === 'MATCHED' ? 'MATCHED (within ±' + h.toleranceMin + ' min)' : h.status.replace('_', ' ')));
+    card.appendChild(line);
+    if (!h.explanationRequired) return;
+    var box = el('div', 'hours-expl');
+    if (h.explanation) box.appendChild(el('div', 'meta', 'Your explanation: ' + h.explanation.decision + ' - ' + h.explanation.text + (h.explanation.at ? ' (' + h.explanation.at + ')' : '')));
+    else box.appendChild(el('div', 'meta hours-bad', 'Explanation required for these hours.'));
+    var linkValid = !data.expiresAt || new Date(data.expiresAt) > new Date();
+    if (!linkValid) { card.appendChild(box); return; }
+    var sel = el('select'); sel.setAttribute('aria-label', 'Hours decision for ' + r.employeeName);
+    [['APPROVED', h.category === 'SHORT_HOURS' ? 'Approve short hours' : 'Approve extra hours'], ['REJECTED', h.category === 'SHORT_HOURS' ? 'Reject short hours' : 'Reject extra hours']].forEach(function (o) {
+      var opt = el('option', null, o[1]); opt.value = o[0]; sel.appendChild(opt);
+    });
+    if (h.explanation) sel.value = h.explanation.decision;
+    var txt = el('input'); txt.type = 'text'; txt.maxLength = 500; txt.placeholder = 'Explanation (required), e.g. extended shift coverage';
+    txt.setAttribute('aria-label', 'Hours explanation for ' + r.employeeName);
+    if (h.explanation) txt.value = h.explanation.text;
+    var save = el('button', 'btn-secondary', h.explanation ? 'Update explanation' : 'Save explanation');
+    var note = el('span', 'meta');
+    save.addEventListener('click', function () {
+      if (txt.value.trim().length < 5) { note.textContent = ' Please write at least 5 characters.'; txt.focus(); return; }
+      save.disabled = true; note.textContent = ' Saving…';
+      var extra = { employeeCode: r.employeeCode, hoursExplanation: 'true', hoursDecision: sel.value, reason: txt.value.trim() };
+      if (r.workDate) extra.workDate = r.workDate;
+      bridgeWrite('modify', extra).then(function (res) {
+        save.disabled = false;
+        if (res.ok) { note.textContent = ' Saved (' + res.decision + '). The hours stay ' + (res.category ? res.category.replace('_', ' ') : 'UNMATCHED') + ' in the report.'; save.textContent = 'Update explanation'; return; }
+        var kind = Net.classifyBackend(res);
+        if (Net.isTerminalTokenKind(kind)) { presentFailure(kind, res); return; }
+        note.textContent = ' ' + Net.userMessage(kind, res.error);
+      }).catch(function (e) { save.disabled = false; Net.logTech('hours explanation failed', e); note.textContent = ' ' + Net.userMessage(e && e.kind, e && e.message); });
+    });
+    [sel, txt, save, note].forEach(function (n) { box.appendChild(n); });
+    card.appendChild(box);
   }
 
   /** Writes go through the POST-capable Worker bridge, never JSONP/GET -
