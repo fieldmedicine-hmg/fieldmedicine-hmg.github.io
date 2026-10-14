@@ -123,6 +123,7 @@
   function render(res) {
     var host = $('zoHost'); clear(host); clear($('zoDetail'));
     host.appendChild(el('div', 'meta', 'Showing operational day ' + fmtDay(res.date) + (($('zoZone').value) ? ' · zone ' + $('zoZone').value : ' · all zones') + '. Required / approved per shift; "open" = pending or unresolved records, never counted as absence.'));
+    renderMissing(res);
     var wrap = el('div', 'table-scroll'), t = el('table', 'data-table zo-table');
     var hr = el('tr');
     ['Zone', 'Configuration', 'Required hours', 'Target: Morning', 'Night', 'Daily total', 'Previous day', 'Morning', 'Night', 'Daily total', 'Unique / coverage', 'Hours exceptions', 'Open records', 'Report', 'Actions'].forEach(function (h) { hr.appendChild(el('th', null, h)); });
@@ -136,6 +137,7 @@
       if (c.config.errors.length) cfgTd.appendChild(el('div', 'disabled-reason', 'Missing: ' + c.config.errors.join('; ')));
       if (c.managers.length) cfgTd.appendChild(el('div', 'meta', c.managers.map(function (m) { return m.name + ' (' + m.role + ')'; }).join(', ')));
       else if (c.managerError) cfgTd.appendChild(el('div', 'disabled-reason', c.managerError));
+      else if ((c.routingReviewers || []).length) cfgTd.appendChild(el('div', 'meta', 'Reviewer: ' + c.routingReviewers.join(', ') + ' (Review_Routing)'));
       tr.appendChild(cfgTd);
       tr.appendChild(el('td', null, c.config.shifts.length ? c.config.shifts.map(function (s) { return s.name + ' ' + (s.requiredHours || '—'); }).join(' · ') + ' (±' + c.config.toleranceMin + 'm)' : '—'));
       var tg = c.target || {};
@@ -174,6 +176,22 @@
     t.appendChild(tb); wrap.appendChild(t); host.appendChild(wrap);
     host.appendChild(el('div', 'meta', 'A normal shift extended with overtime is ONE employee and ONE shift; the extra time is an hours exception that needs the Zone Manager\'s explanation. Unique = distinct approved employees; coverage = approved employee-shifts.'));
     renderSupplements(res);
+  }
+  /** One consolidated list of the inputs the owner still has to provide for this date (nothing is guessed). */
+  function renderMissing(res) {
+    var host = $('zoHost'), items = [];
+    shown(res).forEach(function (z) {
+      var c = z.content, need = [];
+      if (!c.config.configured) need.push('configuration: ' + c.config.errors.join('; '));
+      if (!c.target && z.report.status !== 'FINAL') need.push('daily staffing target for ' + res.date);
+      if (c.managerError) need.push('manager assignment: ' + c.managerError);
+      if (need.length) items.push(c.zone + ' - ' + need.join(' · '));
+    });
+    if (!items.length) { host.appendChild(el('div', 'meta', 'All shown zones have a complete configuration and a target for ' + fmtDay(res.date) + '.')); return; }
+    var box = el('div', 'notice'); box.id = 'zoMissing';
+    box.appendChild(el('div', null, 'Inputs still required (' + items.length + ' zone(s)) - configure with "Configure", enter targets in the grid and press Save targets (or Copy previous day):'));
+    var ul = el('ul'); items.forEach(function (t) { ul.appendChild(el('li', null, t)); }); box.appendChild(ul);
+    host.appendChild(box);
   }
   function updateTotal(zoneId) {
     var m = document.querySelector('input[data-zone="' + zoneId + '"][data-key="morning"]'), n = document.querySelector('input[data-zone="' + zoneId + '"][data-key="night"]');

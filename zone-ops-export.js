@@ -62,7 +62,7 @@
       });
       info.push([c.date, c.zone, c.zoneId, r.status, r.version || '', r.reportId || '', r.generatedAt, r.generatedBy, r.hash, r.integrityOk === false ? 'FAILED' : 'OK',
         r.liveChanged ? 'YES - live data changed after finalization; this sheet shows the issued FINAL figures' : 'NO', c.config.version, c.config.effectiveFrom, c.config.toleranceMin,
-        c.config.totalBasis, c.managers.map(function (m) { return m.name + ' (' + m.role + (m.required ? ', required' : '') + ')'; }).join('; ') || 'legacy single reviewer',
+        c.config.totalBasis, c.managers.map(function (m) { return m.name + ' (' + m.role + (m.required ? ', required' : '') + ')'; }).join('; ') || ((c.routingReviewers || []).length ? c.routingReviewers.join('; ') + ' (single reviewer, Review_Routing)' : 'legacy single reviewer'),
         (c.blockers || []).join(' | ')]);
     });
     var agg = (resp.aggregate || []).map(function (z) {
