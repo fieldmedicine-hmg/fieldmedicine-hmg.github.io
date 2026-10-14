@@ -185,6 +185,7 @@
       if (!c.config.configured) need.push('configuration: ' + c.config.errors.join('; '));
       if (!c.target && z.report.status !== 'FINAL') need.push('daily staffing target for ' + res.date);
       if (c.managerError) need.push('manager assignment: ' + c.managerError);
+      if ((c.config.warnings || []).length) need.push('Settings: ' + c.config.warnings.join('; '));
       if (need.length) items.push(c.zone + ' - ' + need.join(' · '));
     });
     if (!items.length) { host.appendChild(el('div', 'meta', 'All shown zones have a complete configuration and a target for ' + fmtDay(res.date) + '.')); return; }
@@ -242,7 +243,7 @@
     function inp(type, val, ph) { var i = el('input'); i.type = type; if (val) i.value = val; if (ph) i.placeholder = ph; return i; }
     function sel(opts, val) { var s = el('select'); opts.forEach(function (o) { var op = el('option', null, o[1]); op.value = o[0]; s.appendChild(op); }); if (val) s.value = val; return s; }
     var sh = {}; c.config.shifts.forEach(function (s) { sh[s.name] = s; });
-    var mode = sel([['MORNING_NIGHT', 'Morning + Night'], ['SINGLE', 'Single shift'], ['FLEXIBLE', 'Flexible / no fixed shift']], c.config.mode === 'NOT_CONFIGURED' ? 'MORNING_NIGHT' : c.config.mode);
+    var mode = sel([['MORNING_NIGHT', 'Morning + Night'], ['SINGLE', 'Single shift'], ['FLEXIBLE', 'Flexible / no fixed shift'], ['AREA_SCHEDULE', 'Per Area + Shift (times from Settings)']], c.config.mode === 'NOT_CONFIGURED' ? 'MORNING_NIGHT' : c.config.mode);
     field('Operating mode', mode);
     var f = {
       morningStart: inp('time', sh.MORNING && sh.MORNING.start), morningEnd: inp('time', sh.MORNING && sh.MORNING.end), reqMorning: inp('text', sh.MORNING && sh.MORNING.requiredHours, 'H:MM'),
@@ -267,7 +268,7 @@
       var m = mode.value;
       groups.MORNING_NIGHT.forEach(function (n) { n.hidden = m !== 'MORNING_NIGHT'; });
       groups.SINGLE.forEach(function (n) { n.hidden = m !== 'SINGLE'; });
-      groups.HOURS.forEach(function (n) { n.hidden = m === 'MORNING_NIGHT'; });
+      groups.HOURS.forEach(function (n) { n.hidden = m === 'MORNING_NIGHT' || m === 'AREA_SCHEDULE'; });
     }
     mode.addEventListener('change', toggle); toggle();
     box.appendChild(bar);
