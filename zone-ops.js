@@ -216,7 +216,7 @@
     res.zones.forEach(function (z) {
       var c = z.content, t = c.target, pl = c.plan || {}, tot = c.staffing.total || {}, open = c.counts.pending + c.counts.notReviewed + c.counts.unresolved;
       var exp = t ? (t.daily !== null && t.daily !== undefined ? String(t.daily) : (t.morning + t.night) + ' (M ' + t.morning + ' / N ' + t.night + ')') : (pl.status === 'INCOMPLETE' ? 'INCOMPLETE (known ' + pl.knownPartial + ')' : (pl.status === 'NO_ACTIVE_EVENT' ? 'no active event' : 'MISSING PLAN'));
-      var st = !t ? (pl.status === 'INCOMPLETE' ? 'INCOMPLETE' : (pl.status === 'NO_ACTIVE_EVENT' ? 'NO ACTIVE EVENT' : 'MISSING PLAN')) : (tot.status === 'PENDING' ? 'PRELIMINARY - ' + open + ' pending' : (tot.status === 'UNMATCHED' ? (tot.diff < 0 ? 'SHORTAGE ' + (-tot.diff) : 'EXCESS ' + tot.diff) : tot.status));
+      var st = !t ? (pl.status === 'INCOMPLETE' ? 'INCOMPLETE' : (pl.status === 'NO_ACTIVE_EVENT' ? 'NO ACTIVE EVENT' : 'MISSING PLAN')) : (tot.status === 'PENDING' ? 'PRELIMINARY - ' + (open ? open + ' pending' : (c.counts.records ? 'review not submitted' : 'no fingerprints yet')) : (tot.status === 'UNMATCHED' ? (tot.diff < 0 ? 'SHORTAGE ' + (-tot.diff) : 'EXCESS ' + tot.diff) : tot.status));
       var tr = el('tr');
       [c.zone, exp, pl.approvedPlan === null || pl.approvedPlan === undefined ? '—' : pl.approvedPlan, c.counts.records, open, tot.approved, t && tot.diff !== null && tot.diff !== undefined ? (tot.diff > 0 ? '+' : '') + tot.diff : '—', st].forEach(function (v, i) {
         var td = el('td', i === 7 ? 'st-' + (st === 'MATCHED' ? 'MATCHED' : (/^(SHORTAGE|EXCESS|INCOMPLETE|MISSING)/.test(st) ? 'UNMATCHED' : 'PENDING')) : null, v); tr.appendChild(td); });

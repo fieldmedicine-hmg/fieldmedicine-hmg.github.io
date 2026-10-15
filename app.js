@@ -147,7 +147,7 @@
     data.plan.days.forEach(function (d) {
       var exp = d.expected === null ? (d.status === 'INCOMPLETE' ? 'INCOMPLETE (known so far ' + d.knownPartial + ')' : (d.status === 'NO_ACTIVE_EVENT' ? 'no active event' : 'MISSING PLAN')) :
         String(d.expected) + (d.expectedMorning !== null && d.expectedMorning !== undefined ? ' (morning ' + d.expectedMorning + ' + night ' + d.expectedNight + ')' : '');
-      var st = d.status === 'MISSING_PLAN' ? 'no plan for this day' : (d.status === 'INCOMPLETE' ? 'INCOMPLETE plan' : (d.status === 'NO_ACTIVE_EVENT' ? 'no active event' : (d.status === 'PENDING' ? 'PRELIMINARY - ' + d.pending + ' pending' : (d.status === 'MATCHED' ? 'MATCHED' : (d.status === 'SHORTAGE' ? 'SHORTAGE ' + (-d.potentialDiff) : 'EXCESS ' + d.potentialDiff)))));
+      var st = d.status === 'MISSING_PLAN' ? 'no plan for this day' : (d.status === 'INCOMPLETE' ? 'INCOMPLETE plan' : (d.status === 'NO_ACTIVE_EVENT' ? 'no active event' : (d.status === 'PENDING' ? 'PRELIMINARY - ' + d.pending + ' pending' : d.status === 'PRELIMINARY' ? 'PRELIMINARY - review not submitted yet' : (d.status === 'MATCHED' ? 'MATCHED' : (d.status === 'SHORTAGE' ? 'SHORTAGE ' + (-d.potentialDiff) : 'EXCESS ' + d.potentialDiff)))));
       var line = el('div', 'plan-line');
       if (data.plan.days.length > 1) line.appendChild(el('b', null, formatDay(d.date) + ': '));
       line.appendChild(el('span', 'plan-exp', 'Expected: ' + exp));
