@@ -478,21 +478,38 @@
   }
 
   // ---------------- 6. reports ----------------
-  function report(withPdf, btn) {
-    var f = $('zoRepFrom').value, t = $('zoRepTo').value, zone = $('zoRepZone').value;
-    var label = btn.textContent; btn.disabled = true; btn.textContent = 'Generating…'; busy = true; refreshGates();
-    msg('Generating the ' + (zone || 'All-Zones') + ' report for ' + (f === t ? f : f + ' to ' + t) + (withPdf ? ' (PDF + Excel from one snapshot)' : '') + '…');
+  // PDF and Excel are independent: each button sends its own single request and downloads only its own file.
+  function reportPdf(btn) {
+    var f = $('zoRepFrom').value, t = $('zoRepTo').value, zone = $('zoRepZone').value, t0 = Date.now();
     var layout = $('zoRepLayout') ? $('zoRepLayout').value : 'EXECUTIVE';
-    A.call({ action: 'periodAnalytics', op: 'zoneReport', date: f, fromDate: f, toDate: t, zone: zone, pdf: withPdf ? 'true' : 'false', pdfLayout: layout }, TIMEOUT_MS).then(function (res) {
+    var allEmp = $('zoRepAllEmp') && $('zoRepAllEmp').checked;
+    var label = btn.textContent; btn.disabled = true; btn.textContent = 'Generating PDF…'; busy = true; refreshGates();
+    msg('Generating the ' + (layout === 'DETAILED' ? 'Detailed' : 'Executive') + ' PDF for ' + (zone || 'all zones') + ', ' + (f === t ? f : f + ' to ' + t) + '…');
+    A.call({ action: 'periodAnalytics', op: 'zoneReport', date: f, fromDate: f, toDate: t, zone: zone, output: 'pdf', pdfLayout: layout, pdfEmployees: allEmp ? 'ALL' : '' }, TIMEOUT_MS).then(function (res) {
+      busy = false; btn.textContent = label; refreshGates();
+      if (!res.ok) { msg('Error: ' + res.error, true); return; }
+      if (!res.pdfBase64) { msg('Error: the PDF was not produced.', true); return; }
+      try {
+        download(b64ToBytes(res.pdfBase64), res.pdfFileName, 'application/pdf');
+        var tt = res.totals || {};
+        msg('PDF ' + (res.allFinal ? 'FINAL' : 'DRAFT') + ' downloaded in ' + Math.round((Date.now() - t0) / 100) / 10 + ' s: ' + res.pdfPages + ' page(s), ' + (tt.zoneDays || 0) + ' zone-day(s), ' +
+          (res.pdfIncludesEmployees ? 'all ' + (res.pdfEmployeeRows || 0) + ' employee record(s) listed' : (tt.employees || 0) + ' employee record(s) - the ' + (res.pdfActionableRows || 0) + ' that need action are listed (tick "All employees" for every row)') +
+          ', snapshot ' + String(res.bundleHash).slice(0, 12) + '.');
+      } catch (err) { msg('Could not save the PDF: ' + (err && err.message ? err.message : err), true); }
+    });
+  }
+  function reportExcel(btn) {
+    var f = $('zoRepFrom').value, t = $('zoRepTo').value, zone = $('zoRepZone').value, t0 = Date.now();
+    var label = btn.textContent; btn.disabled = true; btn.textContent = 'Generating Excel…'; busy = true; refreshGates();
+    msg('Generating the Excel file for ' + (zone || 'all zones') + ', ' + (f === t ? f : f + ' to ' + t) + '…');
+    A.call({ action: 'periodAnalytics', op: 'zoneReport', date: f, fromDate: f, toDate: t, zone: zone, pdf: 'false' }, TIMEOUT_MS).then(function (res) {
       busy = false; btn.textContent = label; refreshGates();
       if (!res.ok) { msg('Error: ' + res.error, true); return; }
       try {
         download(window.HMGXlsx.build(window.HMGZoneOpsExport.workbookSheets(res)), window.HMGZoneOpsExport.fileName(res), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-        if (withPdf && res.pdfBase64) download(b64ToBytes(res.pdfBase64), res.pdfFileName, 'application/pdf');
-        msg('Report ' + (res.allFinal ? 'FINAL' : 'DRAFT') + ' downloaded: ' + res.reports.length + ' zone-day(s), ' + (res.days ? res.days.length : 1) + ' day(s), snapshot ' + String(res.bundleHash).slice(0, 12) + '.' +
-          (withPdf && res.pdfLayout === 'EXECUTIVE' ? ' Executive PDF (' + res.pdfPages + ' page(s)): dashboard and the employees that need action; every employee row is in the Excel file.' :
-            (withPdf && res.pdfIncludesEmployees === false ? ' The PDF holds the summaries; employee detail for this long period is in the Excel file.' : '')));
-      } catch (err) { msg('Could not build the file: ' + (err && err.message ? err.message : err), true); }
+        var n = res.reports.reduce(function (a, r) { return a + r.content.employees.length; }, 0);
+        msg('Excel ' + (res.allFinal ? 'FINAL' : 'DRAFT') + ' downloaded in ' + Math.round((Date.now() - t0) / 100) / 10 + ' s: ' + res.reports.length + ' zone-day(s), ' + n + ' employee record(s), snapshot ' + String(res.bundleHash).slice(0, 12) + '.');
+      } catch (err) { msg('Could not build the Excel file: ' + (err && err.message ? err.message : err), true); }
     });
   }
 
@@ -590,8 +607,8 @@
   $('zoLoadBtn').addEventListener('click', load);
   $('zoSaveBtn').addEventListener('click', saveTargets);
   $('zoCopyPrevBtn').addEventListener('click', copyPrevious);
-  $('zoRepPdfBtn').addEventListener('click', function () { report(true, $('zoRepPdfBtn')); });
-  $('zoRepXlsxBtn').addEventListener('click', function () { report(false, $('zoRepXlsxBtn')); });
+  $('zoRepPdfBtn').addEventListener('click', function () { reportPdf($('zoRepPdfBtn')); });
+  $('zoRepXlsxBtn').addEventListener('click', function () { reportExcel($('zoRepXlsxBtn')); });
   $('zoSuppSubmitBtn').addEventListener('click', submitSupplement);
   if ($('periodTo')) $('periodTo').addEventListener('change', onDateChange);
   window.addEventListener('pageshow', function (ev) { if (ev.persisted) onDateChange(); }); // a back/forward restore must not show a stale date silently

@@ -98,11 +98,12 @@
         <div class="filter-field"><button id="zoRepSameBtn" class="btn-secondary">Same as operational date</button></div>
         <div class="filter-field"><label for="zoRepZone">Zone</label><select id="zoRepZone"><option value="">All zones</option></select></div>
         <div class="filter-field"><label for="zoRepLayout">PDF</label><select id="zoRepLayout"><option value="EXECUTIVE" selected>Executive (short)</option><option value="DETAILED">Detailed (every employee)</option></select></div>
-        <div class="filter-field"><button id="zoRepPdfBtn" class="btn-primary">Download PDF + Excel</button></div>
-        <div class="filter-field"><button id="zoRepXlsxBtn" class="btn-secondary">Download Excel only</button></div>
+        <div class="filter-field"><label class="zo-check"><input type="checkbox" id="zoRepAllEmp"> All employees (date ranges)</label></div>
+        <div class="filter-field"><button id="zoRepPdfBtn" class="btn-primary">Download PDF</button></div>
+        <div class="filter-field"><button id="zoRepXlsxBtn" class="btn-secondary">Download Excel</button></div>
       </div>
       <div id="zoRepNote" class="meta"></div>
-      <div class="meta">One request builds both files from the same snapshot. A zone report is DRAFT until it is finalized for its day (step 7, "Finalize" in the zone's row).</div>
+      <div class="meta">PDF and Excel are separate downloads (one request each). Both show the snapshot code - the same code means the same data. One-day and one-zone PDFs list every employee; for an all-zones date range tick "All employees". A zone report is DRAFT until it is finalized for its day (step 7, "Finalize" in the zone's row).</div>
     </div>
 
     <div class="zo-sub">
