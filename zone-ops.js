@@ -142,7 +142,8 @@
     if ($('zoRepScope')) $('zoRepScope').textContent = !picked.length ? 'Export scope: no zone ticked yet.' : 'Export scope: ' + picked.map(zoneLabel).join(', ') + ' · ' + period + ' · ' +
       ({ MANAGEMENT: 'Management PDF', DETAILED: 'Detailed PDF', EXECUTIVE: 'Combined overview PDF' }[layout] || layout) + ' · ' + (nFiles > 1 ? nFiles + ' separate PDF files in one ZIP' : 'one PDF file');
     if (!busy) {
-      var what = !picked.length ? '' : (picked.length === 1 ? zoneLabel(picked[0]) : picked.length + ' zones') + ' · ' + short;
+      var nz = picked.filter(function (z) { return z !== '__UNASSIGNED__'; }).length, un = picked.length - nz;
+      var what = !picked.length ? '' : (picked.length === 1 ? zoneLabel(picked[0]) : (nz ? nz + ' zone' + (nz > 1 ? 's' : '') : '') + (un ? (nz ? ' + ' : '') + 'unassigned' : '')) + ' · ' + short;
       $('zoRepPdfBtn').textContent = 'Download PDF' + (nFiles > 1 ? 's (ZIP)' : '') + (what ? ' - ' + what : '');
       $('zoRepXlsxBtn').textContent = 'Download Excel' + (what ? ' - ' + what : '');
       $('zoRepApproveBtn').textContent = 'Approve Report & Export' + (what ? ' - ' + what : '');
@@ -248,9 +249,9 @@
       tr.appendChild(el('td', null, c.staffing.uniqueHeadcount + ' / ' + c.staffing.shiftCoverage));
       tr.appendChild(el('td', c.counts.hoursUnmatched ? 'st-UNMATCHED' : (c.employees.length ? 'st-MATCHED' : null), hoursText(c.employees) + (c.counts.hoursExplanationMissing ? ' (' + c.counts.hoursExplanationMissing + ' need explanation)' : '')));
       tr.appendChild(el('td', null, c.counts.pending + c.counts.notReviewed + c.counts.unresolved));
-      tr.appendChild(el('td', null, final ? 'FINAL v' + z.report.version + (z.report.liveChanged ? ' (live data changed since)' : '') + (z.report.integrityOk === false ? ' ⚠ INTEGRITY' : '') :
+      tr.appendChild(el('td', null, (final ? 'FINAL v' + z.report.version + (z.report.liveChanged ? ' (live data changed since)' : '') + (z.report.integrityOk === false ? ' ⚠ INTEGRITY' : '') :
         'DRAFT · ' + reviewText(c) + ' · ' + (c.blockers.length ? c.blockers.length + ' FINAL blocker(s) - see Details' : 'no blockers: ready to Finalize (not automatic)')) +
-        (z.approval ? ' · APPROVED for distribution ' + z.approval.approvedAt + ' by ' + z.approval.approvedBy + (z.approval.current ? '' : ' (data changed since - approve again to distribute the current figures)') : ''));
+        (z.approval ? ' · APPROVED for distribution ' + z.approval.approvedAt + ' by ' + z.approval.approvedBy + (z.approval.current ? '' : ' (data changed since - approve again to distribute the current figures)') : '')));
       var act = el('td', 'zo-actions');
       function btn(label, cls, fn, reason) { var b = el('button', cls, label); b.id = 'zo-' + label.replace(/\W+/g, '') + '-' + c.zoneId; b.addEventListener('click', function () { fn(b); }); act.appendChild(b); if (reason !== undefined) gate(b, reason); }
       btn('Details', 'btn-secondary', function () { showDetail(z); });
