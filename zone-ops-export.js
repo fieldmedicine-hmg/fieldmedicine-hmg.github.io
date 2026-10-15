@@ -22,10 +22,10 @@
         var x = l[1] || {};
         var gOf = l[0] === 'MORNING' ? pl.morning : (l[0] === 'NIGHT' ? pl.night : pl.scheduled);
         summary.push([c.date, c.zone, c.city, c.config.mode, c.config.policy, l[0], x.required === null || x.required === undefined ? '' : x.required, x.approved === undefined ? '' : x.approved,
-          x.unresolved || 0, diffText(x), x.status || '', c.staffing.uniqueHeadcount, c.staffing.shiftCoverage, c.counts.hoursUnmatched, c.counts.pending + c.counts.notReviewed + c.counts.unresolved,
+          x.unresolved || 0, diffText(x), x.status === 'NO_TARGET' ? (pl.status === 'INCOMPLETE' ? 'INCOMPLETE' : (pl.status === 'NO_ACTIVE_EVENT' ? 'NO ACTIVE EVENT' : 'MISSING PLAN')) : (x.status === 'PENDING' ? 'PRELIMINARY' : x.status || ''), c.staffing.uniqueHeadcount, c.staffing.shiftCoverage, c.counts.hoursUnmatched, c.counts.pending + c.counts.notReviewed + c.counts.unresolved,
           c.counts.disagreements, ver, String(r.hash).slice(0, 16),
           // MANPOWER: expected (effective target) vs external plan - the external Present column is never the actual count
-          tg ? (tg.source || 'MANUAL') + (tg.stale ? ' (STALE)' : '') : 'MISSING PLAN', tg && tg.overrideStatus ? tg.overrideStatus : '', l[0] === 'DAILY TOTAL' ? (pl.approvedPlan === null || pl.approvedPlan === undefined ? '' : pl.approvedPlan) : '',
+          tg ? (tg.source || 'MANUAL') + (tg.stale ? ' (STALE)' : '') : (pl.status === 'INCOMPLETE' ? 'INCOMPLETE' : (pl.status === 'NO_ACTIVE_EVENT' ? 'NO ACTIVE EVENT' : 'MISSING PLAN')), tg && tg.overrideStatus ? tg.overrideStatus : '', l[0] === 'DAILY TOTAL' ? (pl.approvedPlan === null || pl.approvedPlan === undefined ? '' : pl.approvedPlan) : '',
           gOf === null || gOf === undefined ? '' : gOf, l[0] === 'DAILY TOTAL' && pl.planDiff !== null && pl.planDiff !== undefined ? pl.planDiff : '', l[0] === 'DAILY TOTAL' ? (pl.discrepancy ? 'DISCREPANCY' : (pl.status === 'VALID' ? 'OK' : '')) : '',
           pl.status, pl.freshnessLabel || '', l[0] === 'DAILY TOTAL' && pl.status === 'INCOMPLETE' ? pl.knownPartial : '']);
         if (x.status === 'UNMATCHED' || x.status === 'PENDING' || x.status === 'NO_TARGET') {
