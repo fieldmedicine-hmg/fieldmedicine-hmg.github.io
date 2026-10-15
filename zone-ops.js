@@ -37,6 +37,30 @@
     setTimeout(function () { URL.revokeObjectURL(a.href); }, 60000);
   }
   function b64ToBytes(b64) { var bin = atob(b64), out = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i); return out; }
+  // Report files. A file generated seconds after the click is no longer "user initiated" for the browser, which may silently block
+  // the automatic download (pop-up / multiple-download rules). So the file is checked (real PDF / XLSX bytes), an automatic save is
+  // attempted, and a "Save ..." link stays under the buttons - clicking it is a user action and always saves the file.
+  var reportFiles = {};
+  function isPdfBytes(b) { return b && b.length > 1000 && b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46 && b[4] === 0x2D; } // %PDF-
+  function isXlsxBytes(b) { return b && b.length > 100 && b[0] === 0x50 && b[1] === 0x4B; } // PK (zip)
+  function repResult(text, isError) { var m = $('zoRepResult'); if (m) { m.textContent = text || ''; m.className = isError ? 'meta report-error' : 'meta'; } msg(text, isError); }
+  function offerFile(kind, bytes, name, type) {
+    if (reportFiles[kind]) { URL.revokeObjectURL(reportFiles[kind].url); }
+    var url = URL.createObjectURL(new Blob([bytes], { type: type }));
+    reportFiles[kind] = { url: url, name: name, size: bytes.length };
+    var auto = document.createElement('a');
+    auto.href = url; auto.download = name; auto.style.display = 'none';
+    document.body.appendChild(auto); auto.click(); auto.remove();
+    var box = $('zoRepFiles');
+    if (box) {
+      clear(box);
+      Object.keys(reportFiles).sort().forEach(function (k) {
+        var f = reportFiles[k], link = el('a', 'btn-secondary zo-file-link', 'Save ' + f.name + ' (' + Math.max(1, Math.round(f.size / 1024)) + ' KB)');
+        link.href = f.url; link.download = f.name; link.setAttribute('data-kind', k);
+        box.appendChild(link);
+      });
+    }
+  }
   function staffText(x) {
     if (!x) return '—';
     var d = x.diff === null || x.diff === undefined ? '' : (x.diff < 0 ? ' SHORTAGE ' + (-x.diff) : (x.diff > 0 ? ' EXCESS ' + x.diff : ''));
@@ -478,38 +502,45 @@
   }
 
   // ---------------- 6. reports ----------------
-  // PDF and Excel are independent: each button sends its own single request and downloads only its own file.
+  // PDF and Excel are independent: each button sends its own single request and produces only its own file.
   function reportPdf(btn) {
     var f = $('zoRepFrom').value, t = $('zoRepTo').value, zone = $('zoRepZone').value, t0 = Date.now();
     var layout = $('zoRepLayout') ? $('zoRepLayout').value : 'EXECUTIVE';
     var allEmp = $('zoRepAllEmp') && $('zoRepAllEmp').checked;
     var label = btn.textContent; btn.disabled = true; btn.textContent = 'Generating PDF…'; busy = true; refreshGates();
-    msg('Generating the ' + (layout === 'DETAILED' ? 'Detailed' : 'Executive') + ' PDF for ' + (zone || 'all zones') + ', ' + (f === t ? f : f + ' to ' + t) + '…');
+    repResult('Generating the ' + (layout === 'DETAILED' ? 'Detailed' : 'Executive') + ' PDF for ' + (zone || 'all zones') + ', ' + (f === t ? f : f + ' to ' + t) + '…');
     A.call({ action: 'periodAnalytics', op: 'zoneReport', date: f, fromDate: f, toDate: t, zone: zone, output: 'pdf', pdfLayout: layout, pdfEmployees: allEmp ? 'ALL' : '' }, TIMEOUT_MS).then(function (res) {
       busy = false; btn.textContent = label; refreshGates();
-      if (!res.ok) { msg('Error: ' + res.error, true); return; }
-      if (!res.pdfBase64) { msg('Error: the PDF was not produced.', true); return; }
+      if (!res.ok) { repResult('PDF not created: ' + res.error, true); return; }
+      if (!res.pdfBase64) { repResult('PDF not created: the server answered without a PDF file. Nothing was downloaded - please try again.', true); return; }
+      var bytes;
+      try { bytes = b64ToBytes(res.pdfBase64); } catch (err) { repResult('PDF not created: the file could not be decoded (' + (err && err.message ? err.message : err) + ').', true); return; }
+      if (!isPdfBytes(bytes)) { repResult('PDF not created: the server returned data that is not a PDF file. Nothing was downloaded.', true); return; }
       try {
-        download(b64ToBytes(res.pdfBase64), res.pdfFileName, 'application/pdf');
+        offerFile('pdf', bytes, res.pdfFileName || 'HMG_report.pdf', 'application/pdf');
         var tt = res.totals || {};
-        msg('PDF ' + (res.allFinal ? 'FINAL' : 'DRAFT') + ' downloaded in ' + Math.round((Date.now() - t0) / 100) / 10 + ' s: ' + res.pdfPages + ' page(s), ' + (tt.zoneDays || 0) + ' zone-day(s), ' +
-          (res.pdfIncludesEmployees ? 'all ' + (res.pdfEmployeeRows || 0) + ' employee record(s) listed' : (tt.employees || 0) + ' employee record(s) - the ' + (res.pdfActionableRows || 0) + ' that need action are listed (tick "All employees" for every row)') +
-          ', snapshot ' + String(res.bundleHash).slice(0, 12) + '.');
-      } catch (err) { msg('Could not save the PDF: ' + (err && err.message ? err.message : err), true); }
+        repResult('PDF ready in ' + Math.round((Date.now() - t0) / 100) / 10 + ' s - ' + res.pdfFileName + ' (' + res.pdfPages + ' page(s), ' + (res.pdfLayout === 'DETAILED' || res.pdfLayout === 'COMPACT' ? 'Detailed' : 'Executive') + ', ' +
+          (res.allFinal ? 'FINAL' : 'DRAFT') + ', ' + (tt.zoneDays || 0) + ' zone-day(s), ' + (res.pdfIncludesEmployees ? 'all ' + (res.pdfEmployeeRows || 0) + ' employee record(s) listed' : (tt.employees || 0) + ' employee record(s), the ' + (res.pdfActionableRows || 0) + ' that need action listed') +
+          ', snapshot ' + String(res.bundleHash).slice(0, 12) + '). Your browser should save it now; if no file appears, click "Save ' + res.pdfFileName + '" below.');
+      } catch (err) { repResult('Could not save the PDF: ' + (err && err.message ? err.message : err), true); }
     });
   }
   function reportExcel(btn) {
     var f = $('zoRepFrom').value, t = $('zoRepTo').value, zone = $('zoRepZone').value, t0 = Date.now();
     var label = btn.textContent; btn.disabled = true; btn.textContent = 'Generating Excel…'; busy = true; refreshGates();
-    msg('Generating the Excel file for ' + (zone || 'all zones') + ', ' + (f === t ? f : f + ' to ' + t) + '…');
+    repResult('Generating the Excel file for ' + (zone || 'all zones') + ', ' + (f === t ? f : f + ' to ' + t) + '…');
     A.call({ action: 'periodAnalytics', op: 'zoneReport', date: f, fromDate: f, toDate: t, zone: zone, pdf: 'false' }, TIMEOUT_MS).then(function (res) {
       busy = false; btn.textContent = label; refreshGates();
-      if (!res.ok) { msg('Error: ' + res.error, true); return; }
+      if (!res.ok) { repResult('Excel not created: ' + res.error, true); return; }
+      if (!Array.isArray(res.reports)) { repResult('Excel not created: the server answered without report data.', true); return; }
       try {
-        download(window.HMGXlsx.build(window.HMGZoneOpsExport.workbookSheets(res)), window.HMGZoneOpsExport.fileName(res), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        var bytes = window.HMGXlsx.build(window.HMGZoneOpsExport.workbookSheets(res)), name = window.HMGZoneOpsExport.fileName(res);
+        if (!isXlsxBytes(bytes)) { repResult('Excel not created: the workbook could not be built.', true); return; }
+        offerFile('xlsx', bytes, name, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         var n = res.reports.reduce(function (a, r) { return a + r.content.employees.length; }, 0);
-        msg('Excel ' + (res.allFinal ? 'FINAL' : 'DRAFT') + ' downloaded in ' + Math.round((Date.now() - t0) / 100) / 10 + ' s: ' + res.reports.length + ' zone-day(s), ' + n + ' employee record(s), snapshot ' + String(res.bundleHash).slice(0, 12) + '.');
-      } catch (err) { msg('Could not build the Excel file: ' + (err && err.message ? err.message : err), true); }
+        repResult('Excel ready in ' + Math.round((Date.now() - t0) / 100) / 10 + ' s - ' + name + ' (' + (res.allFinal ? 'FINAL' : 'DRAFT') + ', ' + res.reports.length + ' zone-day(s), ' + n + ' employee record(s), snapshot ' +
+          String(res.bundleHash).slice(0, 12) + '). Your browser should save it now; if no file appears, click "Save ' + name + '" below.');
+      } catch (err) { repResult('Could not build the Excel file: ' + (err && err.message ? err.message : err), true); }
     });
   }
 
