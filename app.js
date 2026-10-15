@@ -140,6 +140,26 @@
     }, { retries: 2, baseMs: 1500 });
   }
 
+  /** Expected staff vs fingerprint records vs approvals so far - shown BEFORE the employees (figures are preliminary). */
+  function renderPlan(app, data) {
+    var box = el('div', 'plan-box'); box.id = 'planSummary';
+    box.appendChild(el('div', 'plan-title', 'Staffing plan for ' + data.zone + ' (preliminary until every record is decided)'));
+    data.plan.days.forEach(function (d) {
+      var exp = d.expected === null ? 'MISSING PLAN' : String(d.expected) + (d.expectedMorning !== null && d.expectedMorning !== undefined ? ' (morning ' + d.expectedMorning + ' + night ' + d.expectedNight + ')' : '');
+      var st = d.status === 'MISSING_PLAN' ? 'no plan for this day' : (d.status === 'PENDING' ? 'PENDING - ' + d.pending + ' still to review' : (d.status === 'MATCHED' ? 'MATCHED' : (d.status === 'SHORTAGE' ? 'SHORTAGE ' + (-d.potentialDiff) : 'EXCESS ' + d.potentialDiff)));
+      var line = el('div', 'plan-line');
+      if (data.plan.days.length > 1) line.appendChild(el('b', null, formatDay(d.date) + ': '));
+      line.appendChild(el('span', 'plan-exp', 'Expected employees: ' + exp));
+      line.appendChild(document.createTextNode(' · Fingerprint records: ' + d.records + ' · Approved so far: ' + d.approvedSoFar + ' · Pending review: ' + d.pending +
+        (d.potentialDiff !== null && d.potentialDiff !== undefined ? ' · Potential ' + (d.potentialDiff < 0 ? 'shortage ' + (-d.potentialDiff) : (d.potentialDiff > 0 ? 'excess ' + d.potentialDiff : 'difference 0')) : '') + ' · ' + st));
+      box.appendChild(line);
+      if (d.planDiscrepancy) box.appendChild(el('div', 'plan-warn', 'External plan discrepancy: Approved (F) ' + (d.planApproved === null ? '—' : d.planApproved) + ' vs Scheduled (G) ' + d.planScheduled + ' - the expected figure uses Scheduled.'));
+      if (d.stale) box.appendChild(el('div', 'plan-warn', 'The synced plan for this day is STALE (source or mapping changed) - the Control Center must refresh it.'));
+    });
+    box.appendChild(el('div', 'meta', 'Plan last synced: ' + (data.plan.lastSync || 'never') + (data.plan.freshness && data.plan.freshness !== 'OK' ? ' (' + data.plan.freshnessLabel + ')' : '') + ' · counts as of opening this page.'));
+    app.appendChild(box);
+  }
+
   function renderData(data) {
     setStatus('');
     var app = document.getElementById('app');
@@ -153,6 +173,7 @@
     meta.appendChild(document.createTextNode(data.periodStart ? ' · Period: ' : ' · Date: '));
     meta.appendChild(el('b', null, data.reviewDate));
     app.appendChild(meta);
+    if (data.plan && data.plan.days && data.plan.days.length) renderPlan(app, data);
 
     if (data.completed) {
       var doneBanner = el('div', 'done-banner', 'This review has been submitted. Read-only.');

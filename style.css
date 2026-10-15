@@ -119,3 +119,17 @@ details.detail-group .table-scroll { border: none; border-top: 1px solid #d0d0d0
 @media (max-width: 640px) { .filter-bar { padding: 8px; gap: 6px; } .filter-field select, .filter-field input[type="date"], .filter-field input[type="text"] { min-width: 0; width: 100%; } .zo-actions button { margin: 2px 0; } }
 .zo-wide { flex: 1 1 320px; }
 .zo-wide input[type="text"] { width: 100%; }
+
+/* Manpower plan (2026-10-15) */
+.plan-box { border: 1px solid #9fc5e8; background: #eef5fc; border-radius: 4px; padding: 10px 12px; margin: 10px 0 14px; font-size: 13px; }
+.plan-title { font-weight: bold; margin-bottom: 4px; }
+.plan-line { margin: 3px 0; }
+.plan-exp { font-weight: bold; }
+.plan-warn { color: #7f6000; background: #fff2cc; border-radius: 3px; padding: 2px 6px; margin: 3px 0; }
+.zo-mp { margin-bottom: 10px; }
+.zo-mp-head { margin-bottom: 4px; }
+.zo-link { margin-left: 12px; align-self: center; }
+.zo-plan { min-width: 220px; }
+.mp-OK { background: #d9ead3; color: #274e13; }
+.mp-STALE, .mp-NEVER_SYNCED { background: #fff2cc; color: #7f6000; }
+.mp-ERROR, .mp-NONE { background: #f4cccc; color: #990000; }

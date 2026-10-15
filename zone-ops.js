@@ -123,10 +123,11 @@
   function render(res) {
     var host = $('zoHost'); clear(host); clear($('zoDetail'));
     host.appendChild(el('div', 'meta', 'Showing operational day ' + fmtDay(res.date) + (($('zoZone').value) ? ' · zone ' + $('zoZone').value : ' · all zones') + '. Required / approved per shift; "open" = pending or unresolved records, never counted as absence.'));
+    renderManpower(res);
     renderMissing(res);
     var wrap = el('div', 'table-scroll'), t = el('table', 'data-table zo-table');
     var hr = el('tr');
-    ['Zone', 'Configuration', 'Required hours', 'Target: Morning', 'Night', 'Daily total', 'Previous day', 'Morning', 'Night', 'Daily total', 'Unique / coverage', 'Hours exceptions', 'Open records', 'Report', 'Actions'].forEach(function (h) { hr.appendChild(el('th', null, h)); });
+    ['Zone', 'Configuration', 'Required hours', 'Target: Morning', 'Night', 'Daily total', 'Manpower plan / expected', 'Previous day', 'Morning', 'Night', 'Daily total', 'Unique / coverage', 'Hours exceptions', 'Open records', 'Report', 'Actions'].forEach(function (h) { hr.appendChild(el('th', null, h)); });
     var thead = el('thead'); thead.appendChild(hr); t.appendChild(thead);
     var tb = el('tbody');
     shown(res).forEach(function (z) {
@@ -156,6 +157,7 @@
       tr.appendChild(input('night', tg.night, notMN));
       if (mode === 'MORNING_NIGHT') { var tt = el('td', null, tg.total === null || tg.total === undefined ? '—' : tg.total); tt.setAttribute('data-total', c.zoneId); tr.appendChild(tt); }
       else tr.appendChild(input('daily', tg.daily, mode === 'NOT_CONFIGURED' ? 'Configure the zone first' : ''));
+      var ptd = el('td', 'meta zo-plan', planText(c)); if (c.plan && c.plan.discrepancy) ptd.className += ' st-PENDING'; if (c.target && c.target.stale) ptd.className += ' st-UNMATCHED'; tr.appendChild(ptd);
       var pt = z.previousTarget;
       tr.appendChild(el('td', 'meta', pt ? (pt.mode === 'MORNING_NIGHT' ? pt.morning + ' + ' + pt.night : pt.daily) : '—'));
       tr.appendChild(mode === 'MORNING_NIGHT' ? staffCell(c.staffing.morning) : el('td', null, '—'));
@@ -176,6 +178,56 @@
     t.appendChild(tb); wrap.appendChild(t); host.appendChild(wrap);
     host.appendChild(el('div', 'meta', 'A normal shift extended with overtime is ONE employee and ONE shift; the extra time is an hours exception that needs the Zone Manager\'s explanation. Unique = distinct approved employees; coverage = approved employee-shifts.'));
     renderSupplements(res);
+  }
+  // ---------------- Manpower plan (external Daily Log, read only) ----------------
+  function planText(c) {
+    var pl = c.plan || { status: 'NONE' }, t = c.target;
+    var parts = [];
+    if (pl.status === 'NONE') parts.push('No Daily Log row mapped');
+    else parts.push('Plan ' + pl.status + ': Scheduled (G) ' + pl.scheduled + ' · Approved (F) ' + (pl.approvedPlan === null ? '—' : pl.approvedPlan) + (pl.discrepancy ? ' · PLAN DISCREPANCY ' + (pl.planDiff === null ? '' : (pl.planDiff > 0 ? '+' : '') + pl.planDiff) : ''));
+    parts.push('Expected: ' + (t ? (t.daily !== null && t.daily !== undefined ? t.daily : t.morning + ' + ' + t.night) + ' (' + (t.source || 'MANUAL') + (t.stale ? ', STALE' : '') + ')' : 'MISSING PLAN'));
+    if (t && t.overrideStatus) parts.push(t.overrideStatus);
+    return parts.join(' · ');
+  }
+  function renderManpower(res) {
+    var mp = res.manpower, host = $('zoHost');
+    if (!mp) return;
+    var box = el('div', 'control-card zo-mp'); box.id = 'zoMpPanel';
+    var f = mp.freshness || {};
+    var head = el('div', 'zo-mp-head');
+    head.appendChild(el('span', 'access-state mp-' + (f.state || 'NONE'), 'Manpower plan: ' + (f.state || 'UNAVAILABLE')));
+    head.appendChild(el('span', 'meta', ' ' + (f.label || mp.error || '') + (f.sourceModified ? ' · source file modified ' + f.sourceModified : '')));
+    box.appendChild(head);
+    var m = mp.mapping || {};
+    box.appendChild(el('div', 'meta', 'Mapping: ' + (m.mapped || 0) + ' mapped, ' + (m.unmapped || 0) + ' unmapped, ' + (m.excluded || 0) + ' excluded of ' + (m.sourceNames || 0) + ' Daily Log zone names' +
+      ((m.unmappedNames || []).length ? ' · UNMAPPED (not counted): ' + m.unmappedNames.join(', ') : '') + '. Expected staff = Scheduled (G); actual = approved fingerprint attendance; the external Present column is never used.'));
+    var bar = el('div', 'filter-bar');
+    var rb = el('button', 'btn-secondary', 'Refresh Manpower Plan'); rb.id = 'zoMpRefreshBtn';
+    rb.addEventListener('click', refreshManpower); bar.appendChild(rb);
+    if (mp.mapUrl) { var a = el('a', 'zo-link', 'Edit my Manpower_Zone_Map (Google Sheet)'); a.href = mp.mapUrl; a.target = '_blank'; a.rel = 'noopener'; bar.appendChild(a); }
+    box.appendChild(bar);
+    var bad = (mp.rows || []).filter(function (r) { return r.status !== 'COUNTED'; });
+    if (bad.length) {
+      var det = el('details', 'zo-mp-rec'); det.appendChild(el('summary', null, bad.length + ' Daily Log row(s) for ' + res.date + ' are NOT counted (reconciliation)'));
+      var ul = el('ul'); bad.forEach(function (r) { ul.appendChild(el('li', null, r.external + ' - F ' + (r.approved === null ? '—' : r.approved) + ' / G ' + (r.scheduled === null ? 'blank' : r.scheduled) + ' - ' + r.status + ': ' + r.reason)); });
+      det.appendChild(ul); box.appendChild(det);
+    }
+    host.appendChild(box);
+    gate(rb, A.state().code === 'AUTHORIZED' ? (busy ? 'Working…' : '') : 'Access required - see step 1 above.');
+  }
+  function refreshManpower() {
+    var mp = last && last.manpower;
+    busy = true; refreshGates(); msg('Asking the Manpower Sync to re-check the owner\'s Daily Log, then applying the plan…');
+    var step1 = mp && mp.syncUrl && window.HMGNet ? window.HMGNet.jsonp(mp.syncUrl, { action: 'syncNow' }, { timeoutMs: 90000 }).catch(function (e) { return { ok: false, error: 'the Manpower Sync service did not answer (' + (e && e.message || e) + ') - is it authorized?' }; }) : Promise.resolve({ ok: false, error: 'the Manpower Sync service is not deployed / authorized yet' });
+    step1.then(function (s1) {
+      return opCall('manpowerRefresh').then(function (res) {
+        busy = false;
+        if (!res.ok) { msg('Refresh failed: ' + res.error, true); refreshGates(); return; }
+        msg((s1 && s1.ok ? 'Source checked (' + (s1.changed ? 'CHANGED' : 'unchanged') + ', ' + s1.rows + ' rows). ' : 'Source NOT re-read: ' + (s1 && s1.error || '') + ' - the last cached plan was applied. ') +
+          'Plan applied: ' + res.apply.created + ' new, ' + res.apply.updated + ' updated, ' + res.apply.manualKept + ' manual kept, ' + res.apply.finalKept + ' FINAL kept, ' + res.apply.staleMarked + ' stale. Reloading…');
+        load();
+      });
+    });
   }
   /** One consolidated list of the inputs the owner still has to provide for this date (nothing is guessed). */
   function mode0(c) { return c.config.mode; }
@@ -207,10 +259,11 @@
     last.zones.forEach(function (z) {
       var get = function (k) { var i = document.querySelector('input[data-zone="' + z.zoneId + '"][data-key="' + k + '"]'); return i && !i.disabled ? i.value : null; };
       var mode = z.content.config.mode;
-      if (mode === 'MORNING_NIGHT') { var m = get('morning'), n = get('night'); if (m !== null && n !== null && (m !== '' || n !== '')) list.push({ zoneId: z.zoneId, morning: m, night: n }); }
-      else if (mode === 'SINGLE' || mode === 'FLEXIBLE') { var d = get('daily'); if (d !== null && d !== '') list.push({ zoneId: z.zoneId, daily: d }); }
+      var tg = z.content.target || {}, same = function (v, cur) { return String(v) === (cur === null || cur === undefined ? '' : String(cur)); };
+      if (mode === 'MORNING_NIGHT') { var m = get('morning'), n = get('night'); if (m !== null && n !== null && (m !== '' || n !== '') && !(same(m, tg.morning) && same(n, tg.night))) list.push({ zoneId: z.zoneId, morning: m, night: n }); }
+      else if (mode && mode !== 'NOT_CONFIGURED') { var d = get('daily'); if (d !== null && d !== '' && !same(d, tg.daily)) list.push({ zoneId: z.zoneId, daily: d }); }
     });
-    if (!list.length) { msg('Enter at least one target first (configured zones only).', true); return; }
+    if (!list.length) { msg('No target was changed (a changed value becomes an explicit MANUAL override of the Manpower plan).', true); return; }
     busy = true; refreshGates(); msg('Saving ' + list.length + ' zone target(s) for ' + last.date + '…');
     opCall('zoneTargetsSave', { targets: JSON.stringify(list) }).then(function (res) {
       busy = false;
@@ -306,6 +359,17 @@
     box.appendChild(el('div', 'group-title', c.zone + ' — ' + fmtDay(c.date) + ' (' + (final ? 'FINAL v' + z.report.version : 'DRAFT') + ')'));
     box.appendChild(el('div', 'meta', 'Mode ' + c.config.mode + ' · policy ' + c.config.policy + ' · tolerance ±' + c.config.toleranceMin + ' min, overtime from +' + (c.config.overtimeMin || 60) + ' min · ' + c.config.shifts.map(function (s) { return s.name + ' ' + (s.start || '') + (s.end ? '-' + s.end : '') + ' req ' + (s.requiredHours || '—'); }).join(' · ')));
     box.appendChild(el('div', 'meta', c.staffing.note));
+    box.appendChild(el('div', c.plan && (c.plan.discrepancy || c.plan.status === 'INCOMPLETE') ? 'notice' : 'meta', 'Manpower plan: ' + planText(c) + (c.plan && c.plan.freshnessLabel ? ' · ' + c.plan.freshnessLabel : '')));
+    if (c.plan && c.plan.rows && c.plan.rows.length) { var pu = el('ul'); c.plan.rows.forEach(function (x) { pu.appendChild(el('li', null, x.external + ' → ' + (x.area || 'whole zone') + ' / ' + x.shift + ': F ' + (x.approved === null ? '—' : x.approved) + ', G ' + (x.scheduled === null ? 'blank' : x.scheduled) + ' - ' + x.status + (x.reason ? ' (' + x.reason + ')' : '') + (x.hoursNote ? ' · ' + x.hoursNote : ''))); }); box.appendChild(pu); }
+    if (!final && c.target && c.target.source !== 'MANPOWER_SYNC' && c.plan && c.plan.status === 'VALID') {
+      var rv = el('button', 'btn-secondary', 'Use the Manpower plan instead of the manual target'); rv.id = 'zoRevertPlanBtn';
+      rv.addEventListener('click', function () {
+        if (!window.confirm('Replace the manual target of ' + c.zone + ' on ' + c.date + ' with the Manpower plan? (audited)')) return;
+        busy = true; refreshGates();
+        opCall('zoneTargetRevertToPlan', { zone: c.zone }).then(function (r) { busy = false; msg(r.ok ? 'Target now follows the Manpower plan. Reloading…' : 'Not changed: ' + r.error, !r.ok); load(); });
+      });
+      box.appendChild(rv);
+    }
     if (c.config.errors.length) box.appendChild(el('div', 'notice', 'Configuration missing: ' + c.config.errors.join('; ')));
     if (!final) box.appendChild(el('div', c.blockers.length ? 'notice' : 'meta', c.blockers.length ? 'Finalize is blocked by: ' + c.blockers.join(' · ') : 'Nothing blocks finalization.'));
     var wrap = el('div', 'table-scroll'), t = el('table', 'data-table');

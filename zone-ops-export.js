@@ -17,11 +17,17 @@
     var summary = [], detail = [], unmatched = [], decisions = [], info = [], explRows = [];
     reports.forEach(function (r) {
       var c = r.content, ver = r.status === 'FINAL' ? 'FINAL v' + r.version : 'DRAFT';
+      var pl = c.plan || { status: 'NONE' }, tg = c.target || null;
       shiftLines(c).forEach(function (l) {
         var x = l[1] || {};
+        var gOf = l[0] === 'MORNING' ? pl.morning : (l[0] === 'NIGHT' ? pl.night : pl.scheduled);
         summary.push([c.date, c.zone, c.city, c.config.mode, c.config.policy, l[0], x.required === null || x.required === undefined ? '' : x.required, x.approved === undefined ? '' : x.approved,
           x.unresolved || 0, diffText(x), x.status || '', c.staffing.uniqueHeadcount, c.staffing.shiftCoverage, c.counts.hoursUnmatched, c.counts.pending + c.counts.notReviewed + c.counts.unresolved,
-          c.counts.disagreements, ver, String(r.hash).slice(0, 16)]);
+          c.counts.disagreements, ver, String(r.hash).slice(0, 16),
+          // MANPOWER: expected (effective target) vs external plan - the external Present column is never the actual count
+          tg ? (tg.source || 'MANUAL') + (tg.stale ? ' (STALE)' : '') : 'MISSING PLAN', tg && tg.overrideStatus ? tg.overrideStatus : '', l[0] === 'DAILY TOTAL' ? (pl.approvedPlan === null || pl.approvedPlan === undefined ? '' : pl.approvedPlan) : '',
+          gOf === null || gOf === undefined ? '' : gOf, l[0] === 'DAILY TOTAL' && pl.planDiff !== null && pl.planDiff !== undefined ? pl.planDiff : '', l[0] === 'DAILY TOTAL' ? (pl.discrepancy ? 'DISCREPANCY' : (pl.status === 'VALID' ? 'OK' : '')) : '',
+          pl.status, pl.freshnessLabel || '']);
         if (x.status === 'UNMATCHED' || x.status === 'PENDING' || x.status === 'NO_TARGET') {
           unmatched.push([c.date, c.zone, 'STAFFING', l[0], '', '', x.status, 'Required ' + (x.required === null || x.required === undefined ? '—' : x.required) + ', approved ' + x.approved +
             (x.unresolved ? ', unresolved ' + x.unresolved : '') + (diffText(x) ? ' (' + diffText(x) + ')' : ''), ver]);
@@ -82,7 +88,9 @@
       { name: 'Daily Staffing', columns: [{ header: 'Date', type: 'date' }, { header: 'Zone', width: 22 }, { header: 'City' }, { header: 'Mode', width: 15 }, { header: 'Approval Policy', width: 22 },
         { header: 'Shift', width: 13 }, { header: 'Required', type: 'number' }, { header: 'Approved', type: 'number' }, { header: 'Unresolved', type: 'number' }, { header: 'Shortage / Excess', type: 'string' },
         { header: 'Staffing Status', width: 14 }, { header: 'Unique Headcount', type: 'number' }, { header: 'Shift Coverage', type: 'number' }, { header: 'Hours Unmatched', type: 'number' },
-        { header: 'Pending / Unresolved Records', type: 'number' }, { header: 'Manager Disagreements', type: 'number' }, { header: 'Report', width: 10 }, { header: 'Snapshot', type: 'string', width: 18 }], rows: summary },
+        { header: 'Pending / Unresolved Records', type: 'number' }, { header: 'Manager Disagreements', type: 'number' }, { header: 'Report', width: 10 }, { header: 'Snapshot', type: 'string', width: 18 },
+        { header: 'Effective Expected Source', width: 22 }, { header: 'Override Status', type: 'wrap', width: 30 }, { header: 'External Approved (F)', type: 'number' }, { header: 'External Scheduled (G)', type: 'number' },
+        { header: 'Plan Difference (G-F)', type: 'number' }, { header: 'Plan Check', width: 14 }, { header: 'Plan Status', width: 13 }, { header: 'Plan Source Freshness', type: 'wrap', width: 34 }], rows: summary },
       { name: 'Employee Detail', columns: [{ header: 'Date', type: 'date' }, { header: 'Zone', width: 20 }, { header: 'Employee Code', type: 'string' }, { header: 'Employee Name', width: 26 }, { header: 'Designation' },
         { header: 'Source', width: 22 }, { header: 'Shift' }, { header: 'Original Check-in', type: 'datetimeMin', width: 17 }, { header: 'Original Check-out', type: 'datetimeMin', width: 17 },
         { header: 'Approved Check-in', type: 'datetimeMin', width: 17 }, { header: 'Approved Check-out', type: 'datetimeMin', width: 17 }, { header: 'Time Source', width: 16 },
@@ -103,6 +111,13 @@
         { header: 'Order', type: 'number' }, { header: 'Manager', width: 22 }, { header: 'Manager ID', type: 'string' }, { header: 'Role', width: 20 }, { header: 'Decision' },
         { header: 'Reason / Comment', type: 'wrap', width: 40 }, { header: 'Decided At', type: 'datetimeMin', width: 17 }, { header: 'Agreement' }, { header: 'Official Decision' },
         { header: 'Approval State' }, { header: 'Report', width: 10 }], rows: decisions },
+      { name: 'Manpower Plan', columns: [{ header: 'Date', type: 'string' }, { header: 'Daily Log Zone', width: 22 }, { header: 'HMG Zone', width: 22 }, { header: 'Area', width: 22 }, { header: 'Shift' },
+        { header: 'External Approved (F)', type: 'number' }, { header: 'External Scheduled (G)', type: 'number' }, { header: 'External Present (reference only, not used)', type: 'number' },
+        { header: 'Shift Hours (E)', type: 'string' }, { header: 'Custom Hours (D)', type: 'wrap', width: 22 }, { header: 'Status', width: 16 }, { header: 'Reason', type: 'wrap', width: 50 },
+        { header: 'Hours Note', type: 'wrap', width: 40 }, { header: 'Source Row', type: 'number' }],
+        rows: ((resp.manpower && resp.manpower.rows) || []).map(function (x) { return [x.date, x.external, x.zone, x.area, x.shift, x.approved === null ? '' : x.approved, x.scheduled === null ? '' : x.scheduled,
+          x.presentReferenceOnly === null || x.presentReferenceOnly === undefined ? '' : x.presentReferenceOnly, x.shiftHours, x.customHours, x.status, x.reason, x.hoursNote, x.sourceRow]; })
+          .concat([['', 'Source', '', '', '', '', '', '', '', '', resp.manpower && resp.manpower.freshness ? resp.manpower.freshness.state : 'NONE', resp.manpower && resp.manpower.freshness ? resp.manpower.freshness.label : 'no Manpower data in this response', '', '']]) },
       { name: 'Report Info', columns: [{ header: 'Date', type: 'date' }, { header: 'Zone', width: 20 }, { header: 'Zone ID', type: 'string' }, { header: 'Status' }, { header: 'Version', type: 'number' },
         { header: 'Report ID', type: 'string', width: 30 }, { header: 'Generated / Finalized At', type: 'datetime', width: 20 }, { header: 'By', width: 24 }, { header: 'Snapshot Hash (SHA-256)', type: 'string', width: 66 },
         { header: 'Integrity' }, { header: 'Live Data Changed Since Final', type: 'wrap', width: 40 }, { header: 'Config Version', type: 'string' }, { header: 'Config Effective From', type: 'string' },
