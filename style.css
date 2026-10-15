@@ -133,3 +133,5 @@ details.detail-group .table-scroll { border: none; border-top: 1px solid #d0d0d0
 .mp-OK { background: #d9ead3; color: #274e13; }
 .mp-STALE, .mp-NEVER_SYNCED { background: #fff2cc; color: #7f6000; }
 .mp-ERROR, .mp-NONE { background: #f4cccc; color: #990000; }
+.zo-exec td, .zo-exec th { white-space: nowrap; }
+.zo-flow { font-weight: bold; margin: 4px 0 6px; }

@@ -145,13 +145,14 @@
     var box = el('div', 'plan-box'); box.id = 'planSummary';
     box.appendChild(el('div', 'plan-title', 'Staffing plan for ' + data.zone + ' (preliminary until every record is decided)'));
     data.plan.days.forEach(function (d) {
-      var exp = d.expected === null ? 'MISSING PLAN' : String(d.expected) + (d.expectedMorning !== null && d.expectedMorning !== undefined ? ' (morning ' + d.expectedMorning + ' + night ' + d.expectedNight + ')' : '');
-      var st = d.status === 'MISSING_PLAN' ? 'no plan for this day' : (d.status === 'PENDING' ? 'PENDING - ' + d.pending + ' still to review' : (d.status === 'MATCHED' ? 'MATCHED' : (d.status === 'SHORTAGE' ? 'SHORTAGE ' + (-d.potentialDiff) : 'EXCESS ' + d.potentialDiff)));
+      var exp = d.expected === null ? (d.status === 'INCOMPLETE' ? 'INCOMPLETE (known so far ' + d.knownPartial + ')' : (d.status === 'NO_ACTIVE_EVENT' ? 'no active event' : 'MISSING PLAN')) :
+        String(d.expected) + (d.expectedMorning !== null && d.expectedMorning !== undefined ? ' (morning ' + d.expectedMorning + ' + night ' + d.expectedNight + ')' : '');
+      var st = d.status === 'MISSING_PLAN' ? 'no plan for this day' : (d.status === 'INCOMPLETE' ? 'INCOMPLETE plan' : (d.status === 'NO_ACTIVE_EVENT' ? 'no active event' : (d.status === 'PENDING' ? 'PRELIMINARY - ' + d.pending + ' pending' : (d.status === 'MATCHED' ? 'MATCHED' : (d.status === 'SHORTAGE' ? 'SHORTAGE ' + (-d.potentialDiff) : 'EXCESS ' + d.potentialDiff)))));
       var line = el('div', 'plan-line');
       if (data.plan.days.length > 1) line.appendChild(el('b', null, formatDay(d.date) + ': '));
-      line.appendChild(el('span', 'plan-exp', 'Expected employees: ' + exp));
-      line.appendChild(document.createTextNode(' · Fingerprint records: ' + d.records + ' · Approved so far: ' + d.approvedSoFar + ' · Pending review: ' + d.pending +
-        (d.potentialDiff !== null && d.potentialDiff !== undefined ? ' · Potential ' + (d.potentialDiff < 0 ? 'shortage ' + (-d.potentialDiff) : (d.potentialDiff > 0 ? 'excess ' + d.potentialDiff : 'difference 0')) : '') + ' · ' + st));
+      line.appendChild(el('span', 'plan-exp', 'Expected: ' + exp));
+      line.appendChild(document.createTextNode(' · Fingerprints Received: ' + d.records + ' · Approved Actual: ' + d.approvedSoFar + ' · Pending: ' + d.pending +
+        ' · Difference: ' + (d.potentialDiff !== null && d.potentialDiff !== undefined ? (d.potentialDiff > 0 ? '+' : '') + d.potentialDiff : '—') + ' · Status: ' + st));
       box.appendChild(line);
       if (d.planDiscrepancy) box.appendChild(el('div', 'plan-warn', 'External plan discrepancy: Approved (F) ' + (d.planApproved === null ? '—' : d.planApproved) + ' vs Scheduled (G) ' + d.planScheduled + ' - the expected figure uses Scheduled.'));
       if (d.stale) box.appendChild(el('div', 'plan-warn', 'The synced plan for this day is STALE (source or mapping changed) - the Control Center must refresh it.'));

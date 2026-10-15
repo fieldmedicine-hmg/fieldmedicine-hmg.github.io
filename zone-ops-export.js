@@ -27,7 +27,7 @@
           // MANPOWER: expected (effective target) vs external plan - the external Present column is never the actual count
           tg ? (tg.source || 'MANUAL') + (tg.stale ? ' (STALE)' : '') : 'MISSING PLAN', tg && tg.overrideStatus ? tg.overrideStatus : '', l[0] === 'DAILY TOTAL' ? (pl.approvedPlan === null || pl.approvedPlan === undefined ? '' : pl.approvedPlan) : '',
           gOf === null || gOf === undefined ? '' : gOf, l[0] === 'DAILY TOTAL' && pl.planDiff !== null && pl.planDiff !== undefined ? pl.planDiff : '', l[0] === 'DAILY TOTAL' ? (pl.discrepancy ? 'DISCREPANCY' : (pl.status === 'VALID' ? 'OK' : '')) : '',
-          pl.status, pl.freshnessLabel || '']);
+          pl.status, pl.freshnessLabel || '', l[0] === 'DAILY TOTAL' && pl.status === 'INCOMPLETE' ? pl.knownPartial : '']);
         if (x.status === 'UNMATCHED' || x.status === 'PENDING' || x.status === 'NO_TARGET') {
           unmatched.push([c.date, c.zone, 'STAFFING', l[0], '', '', x.status, 'Required ' + (x.required === null || x.required === undefined ? '—' : x.required) + ', approved ' + x.approved +
             (x.unresolved ? ', unresolved ' + x.unresolved : '') + (diffText(x) ? ' (' + diffText(x) + ')' : ''), ver]);
@@ -90,7 +90,7 @@
         { header: 'Staffing Status', width: 14 }, { header: 'Unique Headcount', type: 'number' }, { header: 'Shift Coverage', type: 'number' }, { header: 'Hours Unmatched', type: 'number' },
         { header: 'Pending / Unresolved Records', type: 'number' }, { header: 'Manager Disagreements', type: 'number' }, { header: 'Report', width: 10 }, { header: 'Snapshot', type: 'string', width: 18 },
         { header: 'Effective Expected Source', width: 22 }, { header: 'Override Status', type: 'wrap', width: 30 }, { header: 'External Approved (F)', type: 'number' }, { header: 'External Scheduled (G)', type: 'number' },
-        { header: 'Plan Difference (G-F)', type: 'number' }, { header: 'Plan Check', width: 14 }, { header: 'Plan Status', width: 13 }, { header: 'Plan Source Freshness', type: 'wrap', width: 34 }], rows: summary },
+        { header: 'Plan Difference (G-F)', type: 'number' }, { header: 'Plan Check', width: 14 }, { header: 'Plan Status', width: 13 }, { header: 'Plan Source Freshness', type: 'wrap', width: 34 }, { header: 'Known Partial (G) - INCOMPLETE only', type: 'number' }], rows: summary },
       { name: 'Employee Detail', columns: [{ header: 'Date', type: 'date' }, { header: 'Zone', width: 20 }, { header: 'Employee Code', type: 'string' }, { header: 'Employee Name', width: 26 }, { header: 'Designation' },
         { header: 'Source', width: 22 }, { header: 'Shift' }, { header: 'Original Check-in', type: 'datetimeMin', width: 17 }, { header: 'Original Check-out', type: 'datetimeMin', width: 17 },
         { header: 'Approved Check-in', type: 'datetimeMin', width: 17 }, { header: 'Approved Check-out', type: 'datetimeMin', width: 17 }, { header: 'Time Source', width: 16 },

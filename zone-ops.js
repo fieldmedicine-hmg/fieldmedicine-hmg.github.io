@@ -184,8 +184,11 @@
     var pl = c.plan || { status: 'NONE' }, t = c.target;
     var parts = [];
     if (pl.status === 'NONE') parts.push('No Daily Log row mapped');
+    else if (pl.status === 'INCOMPLETE') parts.push('INCOMPLETE - known partial ' + pl.knownPartial + (pl.knownMorning !== null && pl.knownMorning !== undefined ? ' (morning ' + pl.knownMorning + ', night ' + pl.knownNight + (pl.unassigned ? ', shift not set ' + pl.unassigned : '') + ')' : '') +
+      ((pl.blankRows || []).length ? ' · Scheduled blank: ' + pl.blankRows.join(', ') : '') + ' - not a complete target');
+    else if (pl.status === 'NO_ACTIVE_EVENT') parts.push('NO ACTIVE EVENT (' + (pl.ended || []).join(', ') + ') - no shortage');
     else parts.push('Plan ' + pl.status + ': Scheduled (G) ' + pl.scheduled + ' · Approved (F) ' + (pl.approvedPlan === null ? '—' : pl.approvedPlan) + (pl.discrepancy ? ' · PLAN DISCREPANCY ' + (pl.planDiff === null ? '' : (pl.planDiff > 0 ? '+' : '') + pl.planDiff) : ''));
-    parts.push('Expected: ' + (t ? (t.daily !== null && t.daily !== undefined ? t.daily : t.morning + ' + ' + t.night) + ' (' + (t.source || 'MANUAL') + (t.stale ? ', STALE' : '') + ')' : 'MISSING PLAN'));
+    parts.push('Expected: ' + (t ? (t.daily !== null && t.daily !== undefined ? t.daily : t.morning + ' + ' + t.night) + ' (' + (t.source || 'MANUAL') + (t.stale ? ', STALE' : '') + ')' : (pl.status === 'INCOMPLETE' ? 'INCOMPLETE' : (pl.status === 'NO_ACTIVE_EVENT' ? 'none (no active event)' : 'MISSING PLAN'))));
     if (t && t.overrideStatus) parts.push(t.overrideStatus);
     return parts.join(' · ');
   }
@@ -206,6 +209,20 @@
     rb.addEventListener('click', refreshManpower); bar.appendChild(rb);
     if (mp.mapUrl) { var a = el('a', 'zo-link', 'Edit my Manpower_Zone_Map (Google Sheet)'); a.href = mp.mapUrl; a.target = '_blank'; a.rel = 'noopener'; bar.appendChild(a); }
     box.appendChild(bar);
+    box.appendChild(el('div', 'meta zo-flow', 'Daily use: 1 choose the date · 2 Load zones · 3 Refresh Manpower Plan · 4 check Expected · 5 managers review fingerprints and approve · 6 read the Difference · 7 export PDF / Excel.'));
+    var et = el('table', 'data-table zo-exec'), eh = el('tr');
+    ['Zone', 'Expected', 'Source Approved (F)', 'Fingerprints Received', 'Pending', 'Approved Actual', 'Difference', 'Status'].forEach(function (h) { eh.appendChild(el('th', null, h)); });
+    var ethead = el('thead'); ethead.appendChild(eh); et.appendChild(ethead); var etb = el('tbody');
+    res.zones.forEach(function (z) {
+      var c = z.content, t = c.target, pl = c.plan || {}, tot = c.staffing.total || {}, open = c.counts.pending + c.counts.notReviewed + c.counts.unresolved;
+      var exp = t ? (t.daily !== null && t.daily !== undefined ? String(t.daily) : (t.morning + t.night) + ' (M ' + t.morning + ' / N ' + t.night + ')') : (pl.status === 'INCOMPLETE' ? 'INCOMPLETE (known ' + pl.knownPartial + ')' : (pl.status === 'NO_ACTIVE_EVENT' ? 'no active event' : 'MISSING PLAN'));
+      var st = !t ? (pl.status === 'INCOMPLETE' ? 'INCOMPLETE' : (pl.status === 'NO_ACTIVE_EVENT' ? 'NO ACTIVE EVENT' : 'MISSING PLAN')) : (tot.status === 'PENDING' ? 'PRELIMINARY - ' + open + ' pending' : (tot.status === 'UNMATCHED' ? (tot.diff < 0 ? 'SHORTAGE ' + (-tot.diff) : 'EXCESS ' + tot.diff) : tot.status));
+      var tr = el('tr');
+      [c.zone, exp, pl.approvedPlan === null || pl.approvedPlan === undefined ? '—' : pl.approvedPlan, c.counts.records, open, tot.approved, t && tot.diff !== null && tot.diff !== undefined ? (tot.diff > 0 ? '+' : '') + tot.diff : '—', st].forEach(function (v, i) {
+        var td = el('td', i === 7 ? 'st-' + (st === 'MATCHED' ? 'MATCHED' : (/^(SHORTAGE|EXCESS|INCOMPLETE|MISSING)/.test(st) ? 'UNMATCHED' : 'PENDING')) : null, v); tr.appendChild(td); });
+      etb.appendChild(tr);
+    });
+    et.appendChild(etb); var ew = el('div', 'table-scroll'); ew.appendChild(et); box.appendChild(ew);
     var bad = (mp.rows || []).filter(function (r) { return r.status !== 'COUNTED'; });
     if (bad.length) {
       var det = el('details', 'zo-mp-rec'); det.appendChild(el('summary', null, bad.length + ' Daily Log row(s) for ' + res.date + ' are NOT counted (reconciliation)'));
