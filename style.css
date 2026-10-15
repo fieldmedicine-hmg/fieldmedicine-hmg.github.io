@@ -137,3 +137,4 @@ details.detail-group .table-scroll { border: none; border-top: 1px solid #d0d0d0
 .zo-flow { font-weight: bold; margin: 4px 0 6px; }
 .zo-files { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
 .zo-files .zo-file-link { display: inline-block; text-decoration: none; }
+.zo-scope { font-weight: 600; }

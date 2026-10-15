@@ -64,9 +64,26 @@
   function staffText(x) {
     if (!x) return '—';
     var d = x.diff === null || x.diff === undefined ? '' : (x.diff < 0 ? ' SHORTAGE ' + (-x.diff) : (x.diff > 0 ? ' EXCESS ' + x.diff : ''));
-    return (x.required === null || x.required === undefined ? '—' : x.required) + ' req / ' + x.approved + ' appr' + (x.unresolved ? ' (+' + x.unresolved + ' open)' : '') + ' · ' + x.status + (x.status === 'UNMATCHED' ? ' —' + d : '');
+    return 'Expected ' + (x.required === null || x.required === undefined ? '—' : x.required) + ' · approved ' + x.approved + (x.unresolved ? ' (+' + x.unresolved + ' open)' : '') + ' · ' +
+      (x.status === 'PENDING' ? 'PRELIMINARY' : (x.status === 'NO_TARGET' ? 'NO TARGET' : x.status)) + (x.status === 'UNMATCHED' ? ' —' + d : '');
   }
   function staffCell(x) { var td = el('td'); td.appendChild(el('span', 'st-' + (x ? x.status : 'NO_TARGET'), staffText(x))); return td; }
+  /** employee working-hours compliance (separate from the headcount check) */
+  function hoursText(emps) {
+    if (!emps.length) return 'no records';
+    var n = {}; emps.forEach(function (e) { n[e.hoursStatus] = (n[e.hoursStatus] || 0) + 1; });
+    return [(n.MATCHED || 0) + ' MATCHED', (n.UNMATCHED || 0) + ' UNMATCHED'].concat(n.NOT_COMPUTABLE ? [n.NOT_COMPUTABLE + ' not computable'] : []).concat(n.NO_REQUIREMENT ? [n.NO_REQUIREMENT + ' pending'] : []).join(' · ');
+  }
+  /** the Zone Manager's review link, from the records' link states (Final Submit = COMPLETED) */
+  function reviewText(c) {
+    var n = c.employees.length, st = {};
+    if (!n) return 'no records';
+    c.employees.forEach(function (e) { var k = String(e.linkState || 'NONE').toUpperCase(); st[k] = (st[k] || 0) + 1; });
+    if (st.COMPLETED === n) return 'manager Final Submit done';
+    if (st.LIVE) return 'manager review open (not submitted)';
+    if (st.NONE === n) return 'review link not sent';
+    return Object.keys(st).map(function (k) { return st[k] + ' ' + k.toLowerCase(); }).join(', ');
+  }
 
   var last = null;      // last successful zoneOpsLoad response
   var busy = false;
@@ -107,14 +124,19 @@
   function onDateChange() {
     var k = $('zoDate').value;
     $('zoDateLabel').textContent = k ? 'Operational day: ' + fmtDay(k) + ' (Asia/Riyadh). Daily targets, compliance, supplementary claims and Finalize use THIS one day.' : 'Choose the operational date.';
-    var pTo = $('periodTo') ? $('periodTo').value : '';
-    var syncBtn = $('zoUsePeriodBtn');
-    if (pTo && pTo !== k) { syncBtn.hidden = false; syncBtn.textContent = 'Use review period end (' + pTo + ')'; } else syncBtn.hidden = true;
     if (reportDatesLinked) { $('zoRepFrom').value = k; $('zoRepTo').value = k; repLabel(); }
     if (last && last.date !== k) { clear($('zoHost')); clear($('zoDetail')); msg('The operational date changed - press "Load zones" for ' + k + '.'); }
     refreshGates();
   }
+  function repScope() {
+    var f = $('zoRepFrom').value, t = $('zoRepTo').value, z = $('zoRepZone').value || 'All zones', layout = $('zoRepLayout') ? $('zoRepLayout').value : 'EXECUTIVE';
+    var period = !f || !t ? '(choose dates)' : (f === t ? fmtDay(f) : f + ' to ' + t), short = !f || !t ? '' : (f === t ? f : f + '…' + t);
+    if ($('zoRepScope')) $('zoRepScope').textContent = 'Export scope: ' + z + ' · ' + period + ' · PDF = ' + (layout === 'DETAILED' ? 'Detailed' : 'Executive') +
+      (f !== t && !($('zoRepAllEmp') && $('zoRepAllEmp').checked) && !$('zoRepZone').value ? ' (employees that need action; tick "All employees" for every row)' : ' (every employee)');
+    if (!busy) { $('zoRepPdfBtn').textContent = 'Download PDF - ' + z + ' · ' + short; $('zoRepXlsxBtn').textContent = 'Download Excel - ' + z + ' · ' + short; }
+  }
   function repLabel() {
+    repScope();
     var f = $('zoRepFrom').value, t = $('zoRepTo').value;
     $('zoRepNote').textContent = !f || !t ? '' : (f === t ? 'One-day report: ' + fmtDay(f) + '.' : 'Multi-day report: ' + f + ' to ' + t + ' (' + daysBetween(f, t) + ' days, inclusive). Every zone is calculated on every day against that day\'s own target, then summed as employee-days - a multi-day total is never compared with a single-day target.');
     refreshGates();
@@ -142,6 +164,7 @@
       res.zones.forEach(function (z) { var o = el('option', null, z.zone + (z.content.config.mode === 'NOT_CONFIGURED' ? ' (not configured)' : '')); o.value = z.zone; sel.appendChild(o); });
       if (cur && res.zones.some(function (z) { return z.zone === cur; })) sel.value = cur;
     });
+    repScope();
   }
   function shown(res) { var f = $('zoZone').value; return res.zones.filter(function (z) { return !f || z.zone === f; }); }
   function render(res) {
@@ -151,7 +174,7 @@
     renderMissing(res);
     var wrap = el('div', 'table-scroll'), t = el('table', 'data-table zo-table');
     var hr = el('tr');
-    ['Zone', 'Configuration', 'Required hours', 'Target: Morning', 'Night', 'Daily total', 'Manpower plan / expected', 'Previous day', 'Morning', 'Night', 'Daily total', 'Unique / coverage', 'Hours exceptions', 'Open records', 'Report', 'Actions'].forEach(function (h) { hr.appendChild(el('th', null, h)); });
+    ['Zone', 'Configuration', 'Required hours', 'Target: Morning', 'Night', 'Daily total', 'Manpower plan / expected', 'Previous day', 'Headcount: Morning', 'Headcount: Night', 'Headcount status (daily total)', 'Unique / coverage', 'Hours status (employees)', 'Open records', 'Report / finalization', 'Actions'].forEach(function (h) { hr.appendChild(el('th', null, h)); });
     var thead = el('thead'); thead.appendChild(hr); t.appendChild(thead);
     var tb = el('tbody');
     shown(res).forEach(function (z) {
@@ -188,9 +211,10 @@
       tr.appendChild(mode === 'MORNING_NIGHT' ? staffCell(c.staffing.night) : el('td', null, '—'));
       tr.appendChild(staffCell(c.staffing.total));
       tr.appendChild(el('td', null, c.staffing.uniqueHeadcount + ' / ' + c.staffing.shiftCoverage));
-      tr.appendChild(el('td', c.counts.hoursExplanationMissing ? 'st-UNMATCHED' : null, c.counts.hoursUnmatched + (c.counts.hoursExplanationMissing ? ' (' + c.counts.hoursExplanationMissing + ' need explanation)' : '')));
+      tr.appendChild(el('td', c.counts.hoursUnmatched ? 'st-UNMATCHED' : (c.employees.length ? 'st-MATCHED' : null), hoursText(c.employees) + (c.counts.hoursExplanationMissing ? ' (' + c.counts.hoursExplanationMissing + ' need explanation)' : '')));
       tr.appendChild(el('td', null, c.counts.pending + c.counts.notReviewed + c.counts.unresolved));
-      tr.appendChild(el('td', null, final ? 'FINAL v' + z.report.version + (z.report.liveChanged ? ' (live data changed since)' : '') + (z.report.integrityOk === false ? ' ⚠ INTEGRITY' : '') : 'DRAFT'));
+      tr.appendChild(el('td', null, final ? 'FINAL v' + z.report.version + (z.report.liveChanged ? ' (live data changed since)' : '') + (z.report.integrityOk === false ? ' ⚠ INTEGRITY' : '') :
+        'DRAFT · ' + reviewText(c) + ' · ' + (c.blockers.length ? c.blockers.length + ' FINAL blocker(s) - see Details' : 'no blockers: ready to Finalize (not automatic)')));
       var act = el('td', 'zo-actions');
       function btn(label, cls, fn, reason) { var b = el('button', cls, label); b.id = 'zo-' + label.replace(/\W+/g, '') + '-' + c.zoneId; b.addEventListener('click', function () { fn(b); }); act.appendChild(b); if (reason !== undefined) gate(b, reason); }
       btn('Details', 'btn-secondary', function () { showDetail(z); });
@@ -223,7 +247,8 @@
     var f = mp.freshness || {};
     var head = el('div', 'zo-mp-head');
     head.appendChild(el('span', 'access-state mp-' + (f.state || 'NONE'), 'Manpower plan: ' + (f.state || 'UNAVAILABLE')));
-    head.appendChild(el('span', 'meta', ' ' + (f.label || mp.error || '') + (f.sourceModified ? ' · source file modified ' + f.sourceModified : '')));
+    head.appendChild(el('span', f.state === 'OK' ? 'meta' : 'meta report-error', ' ' + (f.state === 'OK' ? 'sync OK' : (f.label || mp.error || '')) + ' · last successful sync ' + (f.lastSuccessAt || 'never') +
+      ' · last check ' + (f.lastCheckAt || '—') + (f.sourceModified ? ' · source file modified ' + f.sourceModified : '')));
     box.appendChild(head);
     var m = mp.mapping || {};
     box.appendChild(el('div', 'meta', 'Mapping: ' + (m.mapped || 0) + ' mapped, ' + (m.unmapped || 0) + ' unmapped, ' + (m.excluded || 0) + ' excluded of ' + (m.sourceNames || 0) + ' Daily Log zone names' +
@@ -510,7 +535,7 @@
     var label = btn.textContent; btn.disabled = true; btn.textContent = 'Generating PDF…'; busy = true; refreshGates();
     repResult('Generating the ' + (layout === 'DETAILED' ? 'Detailed' : 'Executive') + ' PDF for ' + (zone || 'all zones') + ', ' + (f === t ? f : f + ' to ' + t) + '…');
     A.call({ action: 'periodAnalytics', op: 'zoneReport', date: f, fromDate: f, toDate: t, zone: zone, output: 'pdf', pdfLayout: layout, pdfEmployees: allEmp ? 'ALL' : '' }, TIMEOUT_MS).then(function (res) {
-      busy = false; btn.textContent = label; refreshGates();
+      busy = false; btn.textContent = label; refreshGates(); repScope();
       if (!res.ok) { repResult('PDF not created: ' + res.error, true); return; }
       if (!res.pdfBase64) { repResult('PDF not created: the server answered without a PDF file. Nothing was downloaded - please try again.', true); return; }
       var bytes;
@@ -530,7 +555,7 @@
     var label = btn.textContent; btn.disabled = true; btn.textContent = 'Generating Excel…'; busy = true; refreshGates();
     repResult('Generating the Excel file for ' + (zone || 'all zones') + ', ' + (f === t ? f : f + ' to ' + t) + '…');
     A.call({ action: 'periodAnalytics', op: 'zoneReport', date: f, fromDate: f, toDate: t, zone: zone, pdf: 'false' }, TIMEOUT_MS).then(function (res) {
-      busy = false; btn.textContent = label; refreshGates();
+      busy = false; btn.textContent = label; refreshGates(); repScope();
       if (!res.ok) { repResult('Excel not created: ' + res.error, true); return; }
       if (!Array.isArray(res.reports)) { repResult('Excel not created: the server answered without report data.', true); return; }
       try {
@@ -629,12 +654,12 @@
   $('zoForgetBtn').addEventListener('click', function () { A.forgetThisDevice(); });
   $('zoTodayBtn').addEventListener('click', function () { setOpDate(A.todayRiyadh()); });
   $('zoYesterdayBtn').addEventListener('click', function () { setOpDate(shiftDays(A.todayRiyadh(), -1)); });
-  $('zoUsePeriodBtn').addEventListener('click', function () { if ($('periodTo') && $('periodTo').value) setOpDate($('periodTo').value); });
   $('zoDate').addEventListener('change', onDateChange);
   $('zoDate').addEventListener('input', onDateChange);
   ['zoRepFrom', 'zoRepTo'].forEach(function (id) { $(id).addEventListener('change', function () { reportDatesLinked = false; repLabel(); }); });
   $('zoRepSameBtn').addEventListener('click', function () { reportDatesLinked = true; $('zoRepFrom').value = $('zoDate').value; $('zoRepTo').value = $('zoDate').value; repLabel(); });
-  $('zoZone').addEventListener('change', function () { if (last) render(last); var z = $('zoZone').value; if (z) $('zoRepZone').value = z; });
+  $('zoZone').addEventListener('change', function () { if (last) render(last); $('zoRepZone').value = $('zoZone').value; repScope(); }); // the report follows the zone view, All zones included
+  ['zoRepZone', 'zoRepLayout', 'zoRepAllEmp'].forEach(function (id) { if ($(id)) $(id).addEventListener('change', repScope); });
   $('zoLoadBtn').addEventListener('click', load);
   $('zoSaveBtn').addEventListener('click', saveTargets);
   $('zoCopyPrevBtn').addEventListener('click', copyPrevious);
