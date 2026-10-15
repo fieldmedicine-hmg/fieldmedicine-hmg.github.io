@@ -113,8 +113,11 @@
     gate($('zoCopyPrevBtn'), noAccess || (busy ? 'Working…' : '') || notLoaded);
     var rf = $('zoRepFrom').value, rt = $('zoRepTo').value;
     var repReason = noAccess || (busy ? 'Working…' : '') || (!rf || !rt ? 'Choose From and To dates.' : (rf > rt ? 'From Date must be on or before To Date.' : (daysBetween(rf, rt) > 31 ? 'At most 31 days per report.' : '')));
-    gate($('zoRepPdfBtn'), repReason);
-    gate($('zoRepXlsxBtn'), repReason);
+    var picked = pickedZones(), realZones = picked.filter(function (z) { return z !== '__UNASSIGNED__'; });
+    var pickReason = !picked.length ? (last ? 'Tick at least one zone below.' : 'Press "Load zones" (step 3), then tick the zones to export.') : '';
+    gate($('zoRepPdfBtn'), repReason || pickReason);
+    gate($('zoRepXlsxBtn'), repReason || pickReason);
+    gate($('zoRepApproveBtn'), repReason || pickReason || (!realZones.length ? 'Unassigned attendance is for review, not for distribution - tick the zone(s) to approve.' : ''));
     gate($('zoSuppSubmitBtn'), noAccess || (busy ? 'Working…' : '') || (last && last.date === date ? '' : 'Load the zones of the operational date first (the claim is for that date).'));
   }
   function daysBetween(a, b) { return Math.round((new Date(b + 'T12:00:00Z') - new Date(a + 'T12:00:00Z')) / 86400000) + 1; }
@@ -128,12 +131,22 @@
     if (last && last.date !== k) { clear($('zoHost')); clear($('zoDetail')); msg('The operational date changed - press "Load zones" for ' + k + '.'); }
     refreshGates();
   }
+  /** the zones ticked for export ('__UNASSIGNED__' = the unassigned-attendance review file) */
+  function pickedZones() { return Array.prototype.slice.call(document.querySelectorAll('#zoRepZones input[type=checkbox]:checked')).map(function (b) { return b.value; }); }
+  function zoneLabel(z) { return z === '__UNASSIGNED__' ? 'UNASSIGNED / NEEDS CLASSIFICATION' : z; }
   function repScope() {
-    var f = $('zoRepFrom').value, t = $('zoRepTo').value, z = $('zoRepZone').value || 'All zones', layout = $('zoRepLayout') ? $('zoRepLayout').value : 'EXECUTIVE';
+    var f = $('zoRepFrom').value, t = $('zoRepTo').value, layout = $('zoRepLayout') ? $('zoRepLayout').value : 'MANAGEMENT', picked = pickedZones();
     var period = !f || !t ? '(choose dates)' : (f === t ? fmtDay(f) : f + ' to ' + t), short = !f || !t ? '' : (f === t ? f : f + '…' + t);
-    if ($('zoRepScope')) $('zoRepScope').textContent = 'Export scope: ' + z + ' · ' + period + ' · PDF = ' + (layout === 'DETAILED' ? 'Detailed' : 'Executive') +
-      (f !== t && !($('zoRepAllEmp') && $('zoRepAllEmp').checked) && !$('zoRepZone').value ? ' (employees that need action; tick "All employees" for every row)' : ' (every employee)');
-    if (!busy) { $('zoRepPdfBtn').textContent = 'Download PDF - ' + z + ' · ' + short; $('zoRepXlsxBtn').textContent = 'Download Excel - ' + z + ' · ' + short; }
+    var nFiles = layout === 'EXECUTIVE' ? (picked.filter(function (z) { return z !== '__UNASSIGNED__'; }).length ? 1 : 0) + (picked.indexOf('__UNASSIGNED__') !== -1 ? 1 : 0) : picked.length;
+    if ($('zoRepAllEmpBox')) $('zoRepAllEmpBox').hidden = layout !== 'EXECUTIVE';
+    if ($('zoRepScope')) $('zoRepScope').textContent = !picked.length ? 'Export scope: no zone ticked yet.' : 'Export scope: ' + picked.map(zoneLabel).join(', ') + ' · ' + period + ' · ' +
+      ({ MANAGEMENT: 'Management PDF', DETAILED: 'Detailed PDF', EXECUTIVE: 'Combined overview PDF' }[layout] || layout) + ' · ' + (nFiles > 1 ? nFiles + ' separate PDF files in one ZIP' : 'one PDF file');
+    if (!busy) {
+      var what = !picked.length ? '' : (picked.length === 1 ? zoneLabel(picked[0]) : picked.length + ' zones') + ' · ' + short;
+      $('zoRepPdfBtn').textContent = 'Download PDF' + (nFiles > 1 ? 's (ZIP)' : '') + (what ? ' - ' + what : '');
+      $('zoRepXlsxBtn').textContent = 'Download Excel' + (what ? ' - ' + what : '');
+      $('zoRepApproveBtn').textContent = 'Approve Report & Export' + (what ? ' - ' + what : '');
+    }
   }
   function repLabel() {
     repScope();
@@ -157,14 +170,36 @@
       refreshGates();
     });
   }
+  function fillZonePicker(res) {
+    var box = $('zoRepZones'), keep = {};
+    pickedZones().forEach(function (z) { keep[z] = true; });
+    clear(box);
+    res.zones.forEach(function (z) {
+      var c = z.content, lab = el('label', 'zo-check zo-zone'), cb = el('input');
+      cb.type = 'checkbox'; cb.value = z.zone; cb.checked = !!keep[z.zone];
+      cb.addEventListener('change', function () { repScope(); refreshGates(); });
+      lab.appendChild(cb);
+      lab.appendChild(document.createTextNode(' ' + z.zone + ' '));
+      lab.appendChild(el('span', 'meta', '(' + c.employees.length + ' employee' + (c.employees.length === 1 ? '' : 's') + (z.approval ? ' · APPROVED' + (z.approval.current ? '' : ', data changed since') : '') + ')'));
+      box.appendChild(lab);
+    });
+    var ul = el('label', 'zo-check zo-zone zo-unassigned'), ucb = el('input');
+    ucb.type = 'checkbox'; ucb.value = '__UNASSIGNED__'; ucb.checked = !!keep['__UNASSIGNED__'];
+    ucb.addEventListener('change', function () { repScope(); refreshGates(); });
+    ul.appendChild(ucb);
+    ul.appendChild(document.createTextNode(' UNASSIGNED / NEEDS CLASSIFICATION '));
+    ul.appendChild(el('span', 'meta', '(' + (res.unmappedRecords || 0) + ' record(s) on ' + res.date + ' whose Area has no zone - separate file, for review only)'));
+    box.appendChild(ul);
+  }
   function fillZoneSelects(res) {
-    ['zoZone', 'zoRepZone', 'zoSuppZone'].forEach(function (id) {
+    fillZonePicker(res);
+    ['zoZone', 'zoSuppZone'].forEach(function (id) {
       var sel = $(id), cur = sel.value; clear(sel);
       if (id !== 'zoSuppZone') { var all = el('option', null, 'All zones'); all.value = ''; sel.appendChild(all); }
       res.zones.forEach(function (z) { var o = el('option', null, z.zone + (z.content.config.mode === 'NOT_CONFIGURED' ? ' (not configured)' : '')); o.value = z.zone; sel.appendChild(o); });
       if (cur && res.zones.some(function (z) { return z.zone === cur; })) sel.value = cur;
     });
-    repScope();
+    repScope(); refreshGates();
   }
   function shown(res) { var f = $('zoZone').value; return res.zones.filter(function (z) { return !f || z.zone === f; }); }
   function render(res) {
@@ -214,7 +249,8 @@
       tr.appendChild(el('td', c.counts.hoursUnmatched ? 'st-UNMATCHED' : (c.employees.length ? 'st-MATCHED' : null), hoursText(c.employees) + (c.counts.hoursExplanationMissing ? ' (' + c.counts.hoursExplanationMissing + ' need explanation)' : '')));
       tr.appendChild(el('td', null, c.counts.pending + c.counts.notReviewed + c.counts.unresolved));
       tr.appendChild(el('td', null, final ? 'FINAL v' + z.report.version + (z.report.liveChanged ? ' (live data changed since)' : '') + (z.report.integrityOk === false ? ' ⚠ INTEGRITY' : '') :
-        'DRAFT · ' + reviewText(c) + ' · ' + (c.blockers.length ? c.blockers.length + ' FINAL blocker(s) - see Details' : 'no blockers: ready to Finalize (not automatic)')));
+        'DRAFT · ' + reviewText(c) + ' · ' + (c.blockers.length ? c.blockers.length + ' FINAL blocker(s) - see Details' : 'no blockers: ready to Finalize (not automatic)')) +
+        (z.approval ? ' · APPROVED for distribution ' + z.approval.approvedAt + ' by ' + z.approval.approvedBy + (z.approval.current ? '' : ' (data changed since - approve again to distribute the current figures)') : ''));
       var act = el('td', 'zo-actions');
       function btn(label, cls, fn, reason) { var b = el('button', cls, label); b.id = 'zo-' + label.replace(/\W+/g, '') + '-' + c.zoneId; b.addEventListener('click', function () { fn(b); }); act.appendChild(b); if (reason !== undefined) gate(b, reason); }
       btn('Details', 'btn-secondary', function () { showDetail(z); });
@@ -528,33 +564,46 @@
 
   // ---------------- 6. reports ----------------
   // PDF and Excel are independent: each button sends its own single request and produces only its own file.
-  function reportPdf(btn) {
-    var f = $('zoRepFrom').value, t = $('zoRepTo').value, zone = $('zoRepZone').value, t0 = Date.now();
-    var layout = $('zoRepLayout') ? $('zoRepLayout').value : 'EXECUTIVE';
-    var allEmp = $('zoRepAllEmp') && $('zoRepAllEmp').checked;
-    var label = btn.textContent; btn.disabled = true; btn.textContent = 'Generating PDF…'; busy = true; refreshGates();
-    repResult('Generating the ' + (layout === 'DETAILED' ? 'Detailed' : 'Executive') + ' PDF for ' + (zone || 'all zones') + ', ' + (f === t ? f : f + ' to ' + t) + '…');
-    A.call({ action: 'periodAnalytics', op: 'zoneReport', date: f, fromDate: f, toDate: t, zone: zone, output: 'pdf', pdfLayout: layout, pdfEmployees: allEmp ? 'ALL' : '' }, TIMEOUT_MS).then(function (res) {
+  function isZipBytes(b) { return b && b.length > 100 && b[0] === 0x50 && b[1] === 0x4B && b[2] === 0x03 && b[3] === 0x04; } // PK\3\4 (zip)
+  function reportPdf(btn, approve) {
+    var f = $('zoRepFrom').value, t = $('zoRepTo').value, zones = pickedZones(), t0 = Date.now();
+    var layout = $('zoRepLayout') ? $('zoRepLayout').value : 'MANAGEMENT';
+    var allEmp = layout === 'EXECUTIVE' && $('zoRepAllEmp') && $('zoRepAllEmp').checked;
+    if (!zones.length) { repResult('Tick at least one zone.', true); return; }
+    var label = btn.textContent; btn.disabled = true; btn.textContent = approve ? 'Approving…' : 'Generating…'; busy = true; refreshGates();
+    var what = zones.map(zoneLabel).join(', ') + ', ' + (f === t ? f : f + ' to ' + t);
+    repResult((approve ? 'Recording your approval and exporting ' : 'Generating ') + what + '…');
+    A.call({ action: 'periodAnalytics', op: approve ? 'zoneReportApprove' : 'zoneReport', date: f, fromDate: f, toDate: t, zones: JSON.stringify(zones), output: 'pdf', pdfLayout: layout, pdfEmployees: allEmp ? 'ALL' : '' }, TIMEOUT_MS).then(function (res) {
       busy = false; btn.textContent = label; refreshGates(); repScope();
-      if (!res.ok) { repResult('PDF not created: ' + res.error, true); return; }
-      if (!res.pdfBase64) { repResult('PDF not created: the server answered without a PDF file. Nothing was downloaded - please try again.', true); return; }
-      var bytes;
-      try { bytes = b64ToBytes(res.pdfBase64); } catch (err) { repResult('PDF not created: the file could not be decoded (' + (err && err.message ? err.message : err) + ').', true); return; }
-      if (!isPdfBytes(bytes)) { repResult('PDF not created: the server returned data that is not a PDF file. Nothing was downloaded.', true); return; }
+      var noun = approve ? 'Approval' : 'PDF';
+      if (!res.ok) { repResult(noun + ' not completed: ' + res.error + (approve ? ' Nothing was approved.' : ''), true); return; }
+      if (!res.pdfBase64) { repResult(noun + ': the server answered without a file. Nothing was downloaded - please try again.', true); return; }
+      var zip = res.pdfMime === 'application/zip', bytes;
+      try { bytes = b64ToBytes(res.pdfBase64); } catch (err) { repResult('The file could not be decoded (' + (err && err.message ? err.message : err) + ').', true); return; }
+      if (zip ? !isZipBytes(bytes) : !isPdfBytes(bytes)) { repResult('The server returned data that is not a ' + (zip ? 'ZIP' : 'PDF') + ' file. Nothing was downloaded.', true); return; }
       try {
-        offerFile('pdf', bytes, res.pdfFileName || 'HMG_report.pdf', 'application/pdf');
-        var tt = res.totals || {};
-        repResult('PDF ready in ' + Math.round((Date.now() - t0) / 100) / 10 + ' s - ' + res.pdfFileName + ' (' + res.pdfPages + ' page(s), ' + (res.pdfLayout === 'DETAILED' || res.pdfLayout === 'COMPACT' ? 'Detailed' : 'Executive') + ', ' +
-          (res.allFinal ? 'FINAL' : 'DRAFT') + ', ' + (tt.zoneDays || 0) + ' zone-day(s), ' + (res.pdfIncludesEmployees ? 'all ' + (res.pdfEmployeeRows || 0) + ' employee record(s) listed' : (tt.employees || 0) + ' employee record(s), the ' + (res.pdfActionableRows || 0) + ' that need action listed') +
-          ', snapshot ' + String(res.bundleHash).slice(0, 12) + '). Your browser should save it now; if no file appears, click "Save ' + res.pdfFileName + '" below.');
-      } catch (err) { repResult('Could not save the PDF: ' + (err && err.message ? err.message : err), true); }
+        offerFile(approve ? 'approved' : 'pdf', bytes, res.pdfFileName, res.pdfMime || 'application/pdf');
+        var files = (res.pdfFiles || []).map(function (x) { return zoneLabel(x.zone || 'combined') + ' (' + x.pages + ' p, ' + x.employees + ' employee' + (x.employees === 1 ? '' : 's') + ', ' + x.state + ')'; }).join('; ');
+        var apText = '';
+        if (approve && res.approvals && res.approvals.length) {
+          var a0 = res.approvals[0];
+          apText = ' APPROVED for distribution by ' + a0.approvedBy + ' at ' + a0.approvedAt + ' - ' + res.approvals.map(function (a) { return a.zone + ': ' + a.approvalId + (a.alreadyApproved ? ' (already approved, same figures)' : ''); }).join('; ') + '.';
+          if (last && f === t && last.date === f) { // the zone table shows the approval at once (no reload)
+            res.approvals.forEach(function (a) { last.zones.forEach(function (z) { if (z.zone === a.zone) z.approval = { id: a.approvalId, approvedAt: a.approvedAt, approvedBy: a.approvedBy, current: true }; }); });
+            render(last); fillZonePicker(last); repScope(); refreshGates();
+          }
+        }
+        repResult((zip ? 'ZIP ready' : 'PDF ready') + ' in ' + Math.round((Date.now() - t0) / 100) / 10 + ' s - ' + res.pdfFileName + (zip ? ' = ' + (res.pdfFiles || []).length + ' separate PDFs' : '') + ': ' + files + '.' + apText +
+          ' Snapshot ' + String(res.bundleHash).slice(0, 12) + '. Your browser should save it now; if no file appears, click "Save ' + res.pdfFileName + '" below.');
+      } catch (err) { repResult('Could not save the file: ' + (err && err.message ? err.message : err), true); }
     });
   }
   function reportExcel(btn) {
-    var f = $('zoRepFrom').value, t = $('zoRepTo').value, zone = $('zoRepZone').value, t0 = Date.now();
+    var f = $('zoRepFrom').value, t = $('zoRepTo').value, zones = pickedZones(), t0 = Date.now();
+    if (!zones.length) { repResult('Tick at least one zone.', true); return; }
     var label = btn.textContent; btn.disabled = true; btn.textContent = 'Generating Excel…'; busy = true; refreshGates();
-    repResult('Generating the Excel file for ' + (zone || 'all zones') + ', ' + (f === t ? f : f + ' to ' + t) + '…');
-    A.call({ action: 'periodAnalytics', op: 'zoneReport', date: f, fromDate: f, toDate: t, zone: zone, pdf: 'false' }, TIMEOUT_MS).then(function (res) {
+    repResult('Generating the Excel file for ' + zones.map(zoneLabel).join(', ') + ', ' + (f === t ? f : f + ' to ' + t) + '…');
+    A.call({ action: 'periodAnalytics', op: 'zoneReport', date: f, fromDate: f, toDate: t, zones: JSON.stringify(zones), pdf: 'false' }, TIMEOUT_MS).then(function (res) {
       busy = false; btn.textContent = label; refreshGates(); repScope();
       if (!res.ok) { repResult('Excel not created: ' + res.error, true); return; }
       if (!Array.isArray(res.reports)) { repResult('Excel not created: the server answered without report data.', true); return; }
@@ -563,7 +612,8 @@
         if (!isXlsxBytes(bytes)) { repResult('Excel not created: the workbook could not be built.', true); return; }
         offerFile('xlsx', bytes, name, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         var n = res.reports.reduce(function (a, r) { return a + r.content.employees.length; }, 0);
-        repResult('Excel ready in ' + Math.round((Date.now() - t0) / 100) / 10 + ' s - ' + name + ' (' + (res.allFinal ? 'FINAL' : 'DRAFT') + ', ' + res.reports.length + ' zone-day(s), ' + n + ' employee record(s), snapshot ' +
+        repResult('Excel ready in ' + Math.round((Date.now() - t0) / 100) / 10 + ' s - ' + name + ' (' + (res.allFinal ? 'FINAL' : 'DRAFT') + ', ' + res.reports.length + ' zone-day(s), ' + n + ' employee record(s)' +
+          (Array.isArray(res.unassigned) ? ', ' + res.unassigned.length + ' unassigned record(s) in their own sheet' : '') + ', snapshot ' +
           String(res.bundleHash).slice(0, 12) + '). Your browser should save it now; if no file appears, click "Save ' + name + '" below.');
       } catch (err) { repResult('Could not build the Excel file: ' + (err && err.message ? err.message : err), true); }
     });
@@ -658,12 +708,15 @@
   $('zoDate').addEventListener('input', onDateChange);
   ['zoRepFrom', 'zoRepTo'].forEach(function (id) { $(id).addEventListener('change', function () { reportDatesLinked = false; repLabel(); }); });
   $('zoRepSameBtn').addEventListener('click', function () { reportDatesLinked = true; $('zoRepFrom').value = $('zoDate').value; $('zoRepTo').value = $('zoDate').value; repLabel(); });
-  $('zoZone').addEventListener('change', function () { if (last) render(last); $('zoRepZone').value = $('zoZone').value; repScope(); }); // the report follows the zone view, All zones included
-  ['zoRepZone', 'zoRepLayout', 'zoRepAllEmp'].forEach(function (id) { if ($(id)) $(id).addEventListener('change', repScope); });
+  $('zoZone').addEventListener('change', function () { if (last) render(last); });
+  ['zoRepLayout', 'zoRepAllEmp'].forEach(function (id) { if ($(id)) $(id).addEventListener('change', repScope); });
+  $('zoRepAllBtn').addEventListener('click', function () { document.querySelectorAll('#zoRepZones input[type=checkbox]').forEach(function (b) { if (b.value !== '__UNASSIGNED__') b.checked = true; }); repScope(); refreshGates(); });
+  $('zoRepNoneBtn').addEventListener('click', function () { document.querySelectorAll('#zoRepZones input[type=checkbox]').forEach(function (b) { b.checked = false; }); repScope(); refreshGates(); });
   $('zoLoadBtn').addEventListener('click', load);
   $('zoSaveBtn').addEventListener('click', saveTargets);
   $('zoCopyPrevBtn').addEventListener('click', copyPrevious);
-  $('zoRepPdfBtn').addEventListener('click', function () { reportPdf($('zoRepPdfBtn')); });
+  $('zoRepPdfBtn').addEventListener('click', function () { reportPdf($('zoRepPdfBtn'), false); });
+  $('zoRepApproveBtn').addEventListener('click', function () { reportPdf($('zoRepApproveBtn'), true); }); // the click IS the approval (one explicit action)
   $('zoRepXlsxBtn').addEventListener('click', function () { reportExcel($('zoRepXlsxBtn')); });
   $('zoSuppSubmitBtn').addEventListener('click', submitSupplement);
   if ($('periodTo')) $('periodTo').addEventListener('change', onDateChange);

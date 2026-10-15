@@ -95,17 +95,24 @@
         <div class="filter-field"><label for="zoRepFrom">From Date</label><input type="date" id="zoRepFrom"></div>
         <div class="filter-field"><label for="zoRepTo">To Date</label><input type="date" id="zoRepTo"></div>
         <div class="filter-field"><button id="zoRepSameBtn" class="btn-secondary">Same as operational date</button></div>
-        <div class="filter-field"><label for="zoRepZone">Zone</label><select id="zoRepZone"><option value="">All zones</option></select></div>
-        <div class="filter-field"><label for="zoRepLayout">PDF</label><select id="zoRepLayout"><option value="EXECUTIVE" selected>Executive (short)</option><option value="DETAILED">Detailed (every employee)</option></select></div>
-        <div class="filter-field"><label class="zo-check"><input type="checkbox" id="zoRepAllEmp"> All employees (date ranges)</label></div>
+        <div class="filter-field"><label for="zoRepLayout">PDF layout</label><select id="zoRepLayout"><option value="MANAGEMENT" selected>Management - one PDF per zone</option><option value="DETAILED">Detailed (audit) - one PDF per zone</option><option value="EXECUTIVE">Combined overview - one PDF for the ticked zones</option></select></div>
+        <div class="filter-field" id="zoRepAllEmpBox" hidden><label class="zo-check"><input type="checkbox" id="zoRepAllEmp"> All employees (combined overview of a date range)</label></div>
+      </div>
+      <div class="zo-pick">
+        <div class="zo-pick-head"><strong>Zones to export</strong> <span class="meta">- tick one or more: each zone is its own PDF; several zones download as one ZIP of separate PDFs.</span>
+          <button id="zoRepAllBtn" class="btn-secondary zo-mini" type="button">Select all zones</button> <button id="zoRepNoneBtn" class="btn-secondary zo-mini" type="button">Clear</button></div>
+        <div id="zoRepZones" class="zo-zone-list"><span class="meta">Press "Load zones" (step 3) to list the zones.</span></div>
+      </div>
+      <div class="filter-bar">
         <div class="filter-field"><button id="zoRepPdfBtn" class="btn-primary">Download PDF</button></div>
         <div class="filter-field"><button id="zoRepXlsxBtn" class="btn-secondary">Download Excel</button></div>
+        <div class="filter-field"><button id="zoRepApproveBtn" class="btn-primary zo-approve">Approve Report &amp; Export</button></div>
       </div>
       <div id="zoRepScope" class="meta zo-scope"></div>
       <div id="zoRepResult" class="meta" role="status" aria-live="polite"></div>
       <div id="zoRepFiles" class="zo-files"></div>
       <div id="zoRepNote" class="meta"></div>
-      <div class="meta">PDF and Excel are separate downloads (one request each). Both show the snapshot code - the same code means the same data. One-day and one-zone PDFs list every employee; for an all-zones date range tick "All employees". A zone report is DRAFT until it is finalized for its day (step 7, "Finalize" in the zone's row).</div>
+      <div class="meta">PDF and Excel are separate downloads (one request each); the same snapshot code means the same data. "Download PDF" exports the ticked zones as DRAFT (or FINAL). "Approve Report &amp; Export" is your approval for distribution: the exported PDFs say APPROVED with your name, the time and a reference, and the approved snapshot is stored. Approval never changes a status (an UNMATCHED stays UNMATCHED) and is separate from Finalize (step 7). Fingerprints whose Area has no zone are never put in a zone's report: tick "UNASSIGNED / NEEDS CLASSIFICATION" to review them in their own file.</div>
     </div>
 
     <div class="zo-sub">

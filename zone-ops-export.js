@@ -130,13 +130,19 @@
         { header: 'Shifts (Settings)', type: 'wrap', width: 50 }, { header: 'Settings Gaps (not invented)', type: 'wrap', width: 40 }, { header: 'Overtime From (min)', type: 'number' },
         { header: 'Approved per Area · Shift', type: 'wrap', width: 45 }, { header: 'Counting Rule', type: 'wrap', width: 50 }],
         rows: info.concat([['', 'Request', '', resp.allFinal ? 'ALL FINAL' : 'CONTAINS DRAFT', '', '', resp.generatedAt, resp.generatedBy, resp.bundleHash, '', '', '', '', '', '', '', 'Time zone: ' + resp.timeZone, '', '', '', '', '']]) },
-    ];
+    ].concat(Array.isArray(resp.unassigned) ? [
+      // fingerprints whose Area has no zone: kept as recorded, never inside a zone's figures
+      { name: 'Unassigned - Classification', columns: [{ header: 'Date', type: 'date' }, { header: 'Employee Code', type: 'string' }, { header: 'Employee Name', width: 26 }, { header: 'Designation' },
+        { header: 'Area (as recorded)', width: 28 }, { header: 'Check-in', type: 'datetime', width: 17 }, { header: 'Check-out', type: 'datetime', width: 17 }, { header: 'Worked Hours', type: 'string' },
+        { header: 'Attendance Status' }, { header: 'Review Decision' }, { header: 'Record ID', type: 'string', width: 30 }, { header: 'Needed', type: 'wrap', width: 50 }],
+        rows: resp.unassigned.map(function (u) { return [u.date, u.code, u.name, u.designation, u.area || '(blank)', u.checkIn, u.checkOut, u.workedHours, u.attendanceStatus, u.decision || 'NOT ROUTED', u.recordId,
+          'Classify the Area in Settings (Zone) - until then it is in no zone report and no zone headcount']; }) }] : []);
   }
 
   function fileName(resp) {
     var zones = (resp.reports || []).map(function (r) { return r.content.zoneId; });
     var uniq = {}; zones.forEach(function (z) { uniq[z] = true; });
-    var tag = Object.keys(uniq).length === 1 ? zones[0] : 'ALL-ZONES';
+    var tag = Object.keys(uniq).length === 1 ? zones[0] : (resp.zonesRequested ? (Object.keys(uniq).length ? Object.keys(uniq).length + '-ZONES' : 'UNASSIGNED') : 'ALL-ZONES');
     var period = resp.fromDate && resp.toDate && resp.fromDate !== resp.toDate ? resp.fromDate + '_to_' + resp.toDate : resp.date;
     return 'HMG_' + tag + '_' + period + '_' + (resp.allFinal ? 'FINAL' : 'DRAFT') + '_' + String(resp.bundleHash || '').slice(0, 8) + '.xlsx';
   }

@@ -138,3 +138,10 @@ details.detail-group .table-scroll { border: none; border-top: 1px solid #d0d0d0
 .zo-files { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
 .zo-files .zo-file-link { display: inline-block; text-decoration: none; }
 .zo-scope { font-weight: 600; }
+.zo-pick { margin: 8px 0; padding: 8px 10px; border: 1px solid #e3e4e6; border-radius: 6px; }
+.zo-pick-head { margin-bottom: 6px; }
+.zo-mini { padding: 2px 8px; font-size: 12px; margin-left: 6px; }
+.zo-zone-list { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.zo-zone { white-space: nowrap; }
+.zo-unassigned { flex-basis: 100%; color: #9a6a00; }
+.zo-approve { background: #2e7d4f; border-color: #2e7d4f; }
