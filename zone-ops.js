@@ -482,14 +482,16 @@
     var f = $('zoRepFrom').value, t = $('zoRepTo').value, zone = $('zoRepZone').value;
     var label = btn.textContent; btn.disabled = true; btn.textContent = 'Generating…'; busy = true; refreshGates();
     msg('Generating the ' + (zone || 'All-Zones') + ' report for ' + (f === t ? f : f + ' to ' + t) + (withPdf ? ' (PDF + Excel from one snapshot)' : '') + '…');
-    A.call({ action: 'periodAnalytics', op: 'zoneReport', date: f, fromDate: f, toDate: t, zone: zone, pdf: withPdf ? 'true' : 'false' }, TIMEOUT_MS).then(function (res) {
+    var layout = $('zoRepLayout') ? $('zoRepLayout').value : 'EXECUTIVE';
+    A.call({ action: 'periodAnalytics', op: 'zoneReport', date: f, fromDate: f, toDate: t, zone: zone, pdf: withPdf ? 'true' : 'false', pdfLayout: layout }, TIMEOUT_MS).then(function (res) {
       busy = false; btn.textContent = label; refreshGates();
       if (!res.ok) { msg('Error: ' + res.error, true); return; }
       try {
         download(window.HMGXlsx.build(window.HMGZoneOpsExport.workbookSheets(res)), window.HMGZoneOpsExport.fileName(res), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         if (withPdf && res.pdfBase64) download(b64ToBytes(res.pdfBase64), res.pdfFileName, 'application/pdf');
         msg('Report ' + (res.allFinal ? 'FINAL' : 'DRAFT') + ' downloaded: ' + res.reports.length + ' zone-day(s), ' + (res.days ? res.days.length : 1) + ' day(s), snapshot ' + String(res.bundleHash).slice(0, 12) + '.' +
-          (withPdf && res.pdfIncludesEmployees === false ? ' The PDF holds the summaries; employee detail for this long period is in the Excel file.' : ''));
+          (withPdf && res.pdfLayout === 'EXECUTIVE' ? ' Executive PDF (' + res.pdfPages + ' page(s)): dashboard and the employees that need action; every employee row is in the Excel file.' :
+            (withPdf && res.pdfIncludesEmployees === false ? ' The PDF holds the summaries; employee detail for this long period is in the Excel file.' : '')));
       } catch (err) { msg('Could not build the file: ' + (err && err.message ? err.message : err), true); }
     });
   }

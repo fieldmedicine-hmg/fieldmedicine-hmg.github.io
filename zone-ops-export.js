@@ -69,7 +69,12 @@
       info.push([c.date, c.zone, c.zoneId, r.status, r.version || '', r.reportId || '', r.generatedAt, r.generatedBy, r.hash, r.integrityOk === false ? 'FAILED' : 'OK',
         r.liveChanged ? 'YES - live data changed after finalization; this sheet shows the issued FINAL figures' : 'NO', c.config.version, c.config.effectiveFrom, c.config.toleranceMin,
         c.config.totalBasis, c.managers.map(function (m) { return m.name + ' (' + m.role + (m.required ? ', required' : '') + ')'; }).join('; ') || ((c.routingReviewers || []).length ? c.routingReviewers.join('; ') + ' (single reviewer, Review_Routing)' : 'legacy single reviewer'),
-        (c.blockers || []).join(' | ')]);
+        (c.blockers || []).join(' | '),
+        // detail the executive PDF leaves out - kept here so nothing is lost
+        (c.config.shifts || []).map(function (x) { return x.name + ' ' + (x.start || '') + (x.end ? '-' + x.end : '') + ' required ' + (x.requiredHours || '—'); }).join('; '),
+        (c.config.warnings || []).join('; '), c.config.overtimeMin === undefined ? '' : c.config.overtimeMin,
+        ((c.staffing && c.staffing.byShift) || []).map(function (b) { return b.shift + ' ' + b.start + '-' + b.end + ': ' + b.approved + ' approved' + (b.open ? ', ' + b.open + ' open' : ''); }).join('; '),
+        c.staffing ? (c.staffing.basis || '') + (c.staffing.note ? ' - ' + c.staffing.note : '') : '']);
     });
     var agg = (resp.aggregate || []).map(function (z) {
       return [resp.fromDate || resp.date, resp.toDate || resp.date, z.zone, z.mode, z.days, z.finalDays, z.statusDays.MATCHED, z.statusDays.UNMATCHED, z.statusDays.PENDING, z.statusDays.NO_TARGET,
@@ -121,8 +126,10 @@
       { name: 'Report Info', columns: [{ header: 'Date', type: 'date' }, { header: 'Zone', width: 20 }, { header: 'Zone ID', type: 'string' }, { header: 'Status' }, { header: 'Version', type: 'number' },
         { header: 'Report ID', type: 'string', width: 30 }, { header: 'Generated / Finalized At', type: 'datetime', width: 20 }, { header: 'By', width: 24 }, { header: 'Snapshot Hash (SHA-256)', type: 'string', width: 66 },
         { header: 'Integrity' }, { header: 'Live Data Changed Since Final', type: 'wrap', width: 40 }, { header: 'Config Version', type: 'string' }, { header: 'Config Effective From', type: 'string' },
-        { header: 'Hours Tolerance (min)', type: 'number' }, { header: 'Daily Total Basis' }, { header: 'Managers', type: 'wrap', width: 40 }, { header: 'Open Blockers', type: 'wrap', width: 50 }],
-        rows: info.concat([['', 'Request', '', resp.allFinal ? 'ALL FINAL' : 'CONTAINS DRAFT', '', '', resp.generatedAt, resp.generatedBy, resp.bundleHash, '', '', '', '', '', '', '', 'Time zone: ' + resp.timeZone]]) },
+        { header: 'Hours Tolerance (min)', type: 'number' }, { header: 'Daily Total Basis' }, { header: 'Managers', type: 'wrap', width: 40 }, { header: 'Open Blockers', type: 'wrap', width: 50 },
+        { header: 'Shifts (Settings)', type: 'wrap', width: 50 }, { header: 'Settings Gaps (not invented)', type: 'wrap', width: 40 }, { header: 'Overtime From (min)', type: 'number' },
+        { header: 'Approved per Area · Shift', type: 'wrap', width: 45 }, { header: 'Counting Rule', type: 'wrap', width: 50 }],
+        rows: info.concat([['', 'Request', '', resp.allFinal ? 'ALL FINAL' : 'CONTAINS DRAFT', '', '', resp.generatedAt, resp.generatedBy, resp.bundleHash, '', '', '', '', '', '', '', 'Time zone: ' + resp.timeZone, '', '', '', '', '']]) },
     ];
   }
 
