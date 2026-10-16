@@ -201,14 +201,14 @@
     if (z.report.status === 'FINAL') return 'The report of ' + z.zone + ' for ' + last.date + ' is FINAL.';
     var ps = (z.content.plan && z.content.plan.status) || 'NONE';
     if (z.content.target || ps !== 'NONE') return z.zone + ' has a staffing plan for ' + last.date + (z.content.target ? '' : ' (' + ps.replace(/_/g, ' ') + ')') + ' - Manual Attendance is for zone-days without a plan (use a supplementary claim).';
-    if (!$('zoSuppArea').value) return 'Choose the event / area (Settings has no event for this zone).';
+    if (!$('zoSuppArea').value) return $('zoSuppArea').options.length ? 'Choose the event / area.' : 'Settings has no event for this zone - add the event to Settings first.';
     return '';
   }
   function fillSuppAreas() {
     var box = $('zoSuppAreaBox'), sel = $('zoSuppArea'), cur = sel.value;
     box.hidden = !manualMode(); clear(sel);
     ((last && last.areasByZone && last.areasByZone[$('zoSuppZone').value]) || []).forEach(function (a) { var o = el('option', null, a); o.value = a; sel.appendChild(o); });
-    if (cur) sel.value = cur;
+    if (cur && Array.prototype.some.call(sel.options, function (o) { return o.value === cur; })) sel.value = cur; // never keep another zone's event
     $('zoSuppSubmitBtn').textContent = manualMode() ? 'Save Manual Attendance / حفظ التحضير اليدوي' : 'Submit Claim';
     refreshGates();
   }
