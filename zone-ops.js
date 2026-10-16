@@ -65,7 +65,7 @@
     if (!x) return '—';
     var d = x.diff === null || x.diff === undefined ? '' : (x.diff < 0 ? ' SHORTAGE ' + (-x.diff) : (x.diff > 0 ? ' EXCESS ' + x.diff : ''));
     return 'Expected ' + (x.required === null || x.required === undefined ? '—' : x.required) + ' · approved ' + x.approved + (x.unresolved ? ' (+' + x.unresolved + ' open)' : '') + ' · ' +
-      (x.status === 'PENDING' ? 'PRELIMINARY' : (x.status === 'NO_TARGET' ? 'NO TARGET' : x.status)) + (x.status === 'UNMATCHED' ? ' —' + d : '');
+      (x.status === 'PENDING' ? 'PRELIMINARY' : (x.status === 'NO_TARGET' ? 'NO PLAN / بدون خطة' : x.status)) + (x.status === 'UNMATCHED' ? ' —' + d : '');
   }
   function staffCell(x) { var td = el('td'); td.appendChild(el('span', 'st-' + (x ? x.status : 'NO_TARGET'), staffText(x))); return td; }
   /** employee working-hours compliance (separate from the headcount check) */
@@ -118,7 +118,7 @@
     gate($('zoRepPdfBtn'), repReason || pickReason);
     gate($('zoRepXlsxBtn'), repReason || pickReason);
     gate($('zoRepApproveBtn'), repReason || pickReason || (!realZones.length ? 'Unassigned attendance is for review, not for distribution - tick the zone(s) to approve.' : ''));
-    gate($('zoSuppSubmitBtn'), noAccess || (busy ? 'Working…' : '') || (last && last.date === date ? '' : 'Load the zones of the operational date first (the claim is for that date).'));
+    gate($('zoSuppSubmitBtn'), noAccess || (busy ? 'Working…' : '') || (last && last.date === date ? '' : 'Load the zones of the operational date first (the claim is for that date).') || manualReason());
   }
   function daysBetween(a, b) { return Math.round((new Date(b + 'T12:00:00Z') - new Date(a + 'T12:00:00Z')) / 86400000) + 1; }
 
@@ -192,6 +192,25 @@
     ul.appendChild(el('span', 'meta', '(' + (res.unmappedRecords || 0) + ' record(s) on ' + res.date + ' whose Area has no zone - separate file, for review only)'));
     box.appendChild(ul);
   }
+  // Manual Attendance / تحضير يدوي (admin only): the form switches between a supplementary claim and a manual entry
+  function manualMode() { return $('zoSuppMode') && $('zoSuppMode').value === 'MANUAL'; }
+  function manualReason() {
+    if (!manualMode() || !last) return '';
+    var z = last.zones.filter(function (x) { return x.zone === $('zoSuppZone').value; })[0];
+    if (!z) return 'Choose the zone.';
+    if (z.report.status === 'FINAL') return 'The report of ' + z.zone + ' for ' + last.date + ' is FINAL.';
+    if (z.content.target) return z.zone + ' has a staffing plan for ' + last.date + ' - Manual Attendance is for zone-days without a plan (use a supplementary claim).';
+    if (!$('zoSuppArea').value) return 'Choose the event / area (Settings has no event for this zone).';
+    return '';
+  }
+  function fillSuppAreas() {
+    var box = $('zoSuppAreaBox'), sel = $('zoSuppArea'), cur = sel.value;
+    box.hidden = !manualMode(); clear(sel);
+    ((last && last.areasByZone && last.areasByZone[$('zoSuppZone').value]) || []).forEach(function (a) { var o = el('option', null, a); o.value = a; sel.appendChild(o); });
+    if (cur) sel.value = cur;
+    $('zoSuppSubmitBtn').textContent = manualMode() ? 'Save Manual Attendance / حفظ التحضير اليدوي' : 'Submit Claim';
+    refreshGates();
+  }
   function fillZoneSelects(res) {
     fillZonePicker(res);
     ['zoZone', 'zoSuppZone'].forEach(function (id) {
@@ -200,7 +219,7 @@
       res.zones.forEach(function (z) { var o = el('option', null, z.zone + (z.content.config.mode === 'NOT_CONFIGURED' ? ' (not configured)' : '')); o.value = z.zone; sel.appendChild(o); });
       if (cur && res.zones.some(function (z) { return z.zone === cur; })) sel.value = cur;
     });
-    repScope(); refreshGates();
+    repScope(); fillSuppAreas(); refreshGates();
   }
   function shown(res) { var f = $('zoZone').value; return res.zones.filter(function (z) { return !f || z.zone === f; }); }
   function render(res) {
@@ -273,7 +292,7 @@
       ((pl.blankRows || []).length ? ' · Scheduled blank: ' + pl.blankRows.join(', ') : '') + ' - not a complete target');
     else if (pl.status === 'NO_ACTIVE_EVENT') parts.push('NO ACTIVE EVENT (' + (pl.ended || []).join(', ') + ') - no shortage');
     else parts.push('Plan ' + pl.status + ': Scheduled (G) ' + pl.scheduled + ' · Approved (F) ' + (pl.approvedPlan === null ? '—' : pl.approvedPlan) + (pl.discrepancy ? ' · PLAN DISCREPANCY ' + (pl.planDiff === null ? '' : (pl.planDiff > 0 ? '+' : '') + pl.planDiff) : ''));
-    parts.push('Expected: ' + (t ? (t.daily !== null && t.daily !== undefined ? t.daily : t.morning + ' + ' + t.night) + ' (' + (t.source || 'MANUAL') + (t.stale ? ', STALE' : '') + ')' : (pl.status === 'INCOMPLETE' ? 'INCOMPLETE' : (pl.status === 'NO_ACTIVE_EVENT' ? 'none (no active event)' : 'MISSING PLAN'))));
+    parts.push('Expected: ' + (t ? (t.daily !== null && t.daily !== undefined ? t.daily : t.morning + ' + ' + t.night) + ' (' + (t.source || 'MANUAL') + (t.stale ? ', STALE' : '') + ')' : (pl.status === 'INCOMPLETE' ? 'INCOMPLETE' : (pl.status === 'NO_ACTIVE_EVENT' ? 'none (no active event)' : 'NO PLAN / بدون خطة'))));
     if (t && t.overrideStatus) parts.push(t.overrideStatus);
     return parts.join(' · ');
   }
@@ -301,8 +320,8 @@
     var ethead = el('thead'); ethead.appendChild(eh); et.appendChild(ethead); var etb = el('tbody');
     res.zones.forEach(function (z) {
       var c = z.content, t = c.target, pl = c.plan || {}, tot = c.staffing.total || {}, open = c.counts.pending + c.counts.notReviewed + c.counts.unresolved;
-      var exp = t ? (t.daily !== null && t.daily !== undefined ? String(t.daily) : (t.morning + t.night) + ' (M ' + t.morning + ' / N ' + t.night + ')') : (pl.status === 'INCOMPLETE' ? 'INCOMPLETE (known ' + pl.knownPartial + ')' : (pl.status === 'NO_ACTIVE_EVENT' ? 'no active event' : 'MISSING PLAN'));
-      var st = !t ? (pl.status === 'INCOMPLETE' ? 'INCOMPLETE' : (pl.status === 'NO_ACTIVE_EVENT' ? 'NO ACTIVE EVENT' : 'MISSING PLAN')) : (tot.status === 'PENDING' ? 'PRELIMINARY - ' + (open ? open + ' pending' : (c.counts.records ? 'review not submitted' : 'no fingerprints yet')) : (tot.status === 'UNMATCHED' ? (tot.diff < 0 ? 'SHORTAGE ' + (-tot.diff) : 'EXCESS ' + tot.diff) : tot.status));
+      var exp = t ? (t.daily !== null && t.daily !== undefined ? String(t.daily) : (t.morning + t.night) + ' (M ' + t.morning + ' / N ' + t.night + ')') : (pl.status === 'INCOMPLETE' ? 'INCOMPLETE (known ' + pl.knownPartial + ')' : (pl.status === 'NO_ACTIVE_EVENT' ? 'no active event' : 'NO PLAN / بدون خطة'));
+      var st = !t ? (pl.status === 'INCOMPLETE' ? 'INCOMPLETE' : (pl.status === 'NO_ACTIVE_EVENT' ? 'NO ACTIVE EVENT' : 'NO PLAN / بدون خطة')) : (tot.status === 'PENDING' ? 'PRELIMINARY - ' + (open ? open + ' pending' : (c.counts.records ? 'review not submitted' : 'no fingerprints yet')) : (tot.status === 'UNMATCHED' ? (tot.diff < 0 ? 'SHORTAGE ' + (-tot.diff) : 'EXCESS ' + tot.diff) : tot.status));
       var tr = el('tr');
       [c.zone, exp, pl.approvedPlan === null || pl.approvedPlan === undefined ? '—' : pl.approvedPlan, c.counts.records, open, tot.approved, t && tot.diff !== null && tot.diff !== undefined ? (tot.diff > 0 ? '+' : '') + tot.diff : '—', st].forEach(function (v, i) {
         var td = el('td', i === 7 ? 'st-' + (st === 'MATCHED' ? 'MATCHED' : (/^(SHORTAGE|EXCESS|INCOMPLETE|MISSING)/.test(st) ? 'UNMATCHED' : 'PENDING')) : null, v); tr.appendChild(td); });
@@ -481,7 +500,7 @@
     t.appendChild(hr);
     c.employees.forEach(function (e) {
       var tr = el('tr');
-      [e.name + (e.source !== 'BIOMETRIC' ? ' [' + e.source + ']' : ''), e.code, e.shift, (e.originalIn || '—') + ' → ' + (e.originalOut || '—'), (e.approvedIn || '—') + ' → ' + (e.approvedOut || '—') + (e.timeSource !== 'ORIGINAL' ? ' (' + e.timeSource + ')' : ''),
+      [e.name + (e.source === 'MANUAL' ? ' [MANUAL / يدوي]' : (e.source !== 'BIOMETRIC' ? ' [' + e.source + ']' : '')), e.code, e.shift, (e.originalIn || '—') + ' → ' + (e.originalOut || '—'), (e.approvedIn || '—') + ' → ' + (e.approvedOut || '—') + (e.timeSource !== 'ORIGINAL' ? ' (' + e.timeSource + ')' : ''),
         (e.actualHours || '—') + ' / ' + (e.requiredHours || '—'), e.varianceHours || ''].forEach(function (v) { tr.appendChild(el('td', null, v)); });
       tr.appendChild(el('td', 'st-' + e.hoursStatus, e.hoursStatus + (e.hoursCategory ? ' — ' + e.hoursCategory.replace('_', ' ') : '')));
       var ex = el('td');
@@ -651,15 +670,15 @@
   function renderSupplements(res) {
     var host = $('zoSuppList'); clear(host);
     $('zoSuppDateLabel').textContent = 'Claims for operational day ' + fmtDay(res.date) + '.';
-    if (!res.supplements.length) { host.appendChild(el('div', 'meta', 'No supplementary claims for this date.')); return; }
+    if (!res.supplements.length) { host.appendChild(el('div', 'meta', 'No supplementary claims or manual attendance for this date.')); return; }
     var t = el('table', 'data-table'), hr = el('tr');
-    ['Zone', 'Employee', 'Code', 'Claimed in', 'Claimed out', 'Reason', 'Status', 'Submitted by', 'Verified by', ''].forEach(function (h) { hr.appendChild(el('th', null, h)); });
+    ['Type', 'Zone', 'Employee', 'Code', 'In', 'Out', 'Reason', 'Status', 'Submitted by', 'Verified by', ''].forEach(function (h) { hr.appendChild(el('th', null, h)); });
     t.appendChild(hr);
     res.supplements.forEach(function (s) {
       var tr = el('tr');
-      [s.zone, s.name, s.code, s.claimedIn || '—', s.claimedOut || '—', s.reason, s.status, s.submittedBy + ' · ' + s.submittedAt, s.verifiedBy ? s.verifiedBy + ' · ' + s.verifiedAt : '—'].forEach(function (v) { tr.appendChild(el('td', null, v)); });
+      [s.mode === 'MANUAL' ? 'MANUAL / يدوي' : 'Claim', s.zone + (s.area ? ' · ' + s.area : ''), s.name, s.code, s.claimedIn || '—', s.claimedOut || '—', s.reason, s.status, s.submittedBy + ' · ' + s.submittedAt, s.verifiedBy ? s.verifiedBy + ' · ' + s.verifiedAt : '—'].forEach(function (v) { tr.appendChild(el('td', null, v)); });
       var act = el('td');
-      if (s.status === 'SUBMITTED') {
+      if (s.status === 'SUBMITTED' || s.status === 'MANUAL') {
         var wb = el('button', 'btn-secondary', 'Withdraw');
         wb.addEventListener('click', function () { wb.disabled = true; opCall('supplementaryWithdraw', { supplementId: s.supplementId }).then(function (r) { if (!r.ok) { wb.disabled = false; msg('Error: ' + r.error, true); return; } load(); }); });
         act.appendChild(wb);
@@ -672,9 +691,11 @@
   function submitSupplement() {
     var p = { zone: $('zoSuppZone').value, employeeCode: $('zoSuppCode').value.trim(), employeeName: $('zoSuppName').value.trim(), designation: $('zoSuppDesig').value,
       shift: $('zoSuppShift').value.trim(), checkin: $('zoSuppIn').value, checkout: $('zoSuppOut').value, checkoutNextDay: $('zoSuppNext').checked ? 'true' : 'false', reason: $('zoSuppReason').value.trim() };
-    if (!p.zone || !p.employeeCode || !p.employeeName || !p.reason || (!p.checkin && !p.checkout)) { msg('Zone, employee code and name, at least one claimed time and a reason are required.', true); return; }
-    busy = true; refreshGates(); msg('Submitting the supplementary claim for ' + $('zoDate').value + '…');
-    opCall('supplementarySubmit', p).then(function (res) {
+    if (!p.zone || !p.employeeCode || !p.employeeName || !p.reason || (!p.checkin && !p.checkout)) { msg('Zone, employee code and name, at least one time and a reason are required.', true); return; }
+    var manual = manualMode();
+    if (manual) { p.area = $('zoSuppArea').value; if (!p.area) { msg('Choose the event / area.', true); return; } }
+    busy = true; refreshGates(); msg((manual ? 'Saving the manual attendance / حفظ التحضير اليدوي for ' : 'Submitting the supplementary claim for ') + $('zoDate').value + '…');
+    opCall(manual ? 'manualAttendanceSubmit' : 'supplementarySubmit', p).then(function (res) {
       busy = false; refreshGates();
       if (!res.ok) { msg('Error: ' + res.error, true); return; }
       ['zoSuppCode', 'zoSuppName', 'zoSuppShift', 'zoSuppIn', 'zoSuppOut', 'zoSuppReason'].forEach(function (id) { $(id).value = ''; }); $('zoSuppNext').checked = false;
@@ -720,6 +741,8 @@
   $('zoRepApproveBtn').addEventListener('click', function () { reportPdf($('zoRepApproveBtn'), true); }); // the click IS the approval (one explicit action)
   $('zoRepXlsxBtn').addEventListener('click', function () { reportExcel($('zoRepXlsxBtn')); });
   $('zoSuppSubmitBtn').addEventListener('click', submitSupplement);
+  ['zoSuppMode', 'zoSuppZone'].forEach(function (id) { $(id).addEventListener('change', fillSuppAreas); });
+  $('zoSuppArea').addEventListener('change', refreshGates);
   if ($('periodTo')) $('periodTo').addEventListener('change', onDateChange);
   window.addEventListener('pageshow', function (ev) { if (ev.persisted) onDateChange(); }); // a back/forward restore must not show a stale date silently
   window.addEventListener('load', onDateChange); // control.js (loaded after this file) sets the review period - compare with it once it exists

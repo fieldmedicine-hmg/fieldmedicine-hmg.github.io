@@ -6,7 +6,7 @@
 <meta name="referrer" content="no-referrer">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://script.google.com https://script.googleusercontent.com; style-src 'self'; connect-src https://hmg-write-bridge-poc.fieldmedicine1.workers.dev; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';">
 <title>HMG Attendance Control Center</title>
-<link rel="stylesheet" href="style.css?v=20261015m">
+<link rel="stylesheet" href="style.css?v=20261016a">
 </head>
 <body>
 <div class="wrap analytics-wrap">
@@ -116,10 +116,12 @@
     </div>
 
     <div class="zo-sub">
-      <div class="section-title">Supplementary Attendance (missing fingerprint)</div>
-      <div class="meta">Recorded separately from biometric data; it appears in the manager's review link and counts only after the manager approves it. <span id="zoSuppDateLabel"></span></div>
+      <div class="section-title">Supplementary Attendance (missing fingerprint) &middot; Manual Attendance / تحضير يدوي</div>
+      <div class="meta">Recorded separately from biometric data. A <b>supplementary claim</b> appears in the manager's review link and counts only after the manager approves it. <b>Manual Attendance / تحضير يدوي</b> (admin only) is for an event whose zone-day has <b>no plan</b>: it counts as soon as you save it, is marked MANUAL / يدوي in the reports and is recorded under your name. <span id="zoSuppDateLabel"></span></div>
       <div class="filter-bar">
+        <div class="filter-field"><label for="zoSuppMode">Entry type</label><select id="zoSuppMode"><option value="CLAIM" selected>Supplementary claim (Zone Manager approves)</option><option value="MANUAL">Manual Attendance / تحضير يدوي (admin, counts now)</option></select></div>
         <div class="filter-field"><label for="zoSuppZone">Zone</label><select id="zoSuppZone"></select></div>
+        <div class="filter-field" id="zoSuppAreaBox" hidden><label for="zoSuppArea">Event / Area</label><select id="zoSuppArea"></select></div>
         <div class="filter-field"><label for="zoSuppCode">Employee Code</label><input type="text" id="zoSuppCode" maxlength="40"></div>
         <div class="filter-field"><label for="zoSuppName">Employee Name</label><input type="text" id="zoSuppName" maxlength="80"></div>
         <div class="filter-field"><label for="zoSuppDesig">Designation</label>
@@ -192,11 +194,11 @@
   </div>
 
 </div>
-<script src="net.js?v=20261015m"></script>
-<script src="xlsx.js?v=20261015m"></script>
-<script src="zone-ops-export.js?v=20261015m"></script>
-<script src="access.js?v=20261015m"></script>
-<script src="zone-ops.js?v=20261015m"></script>
-<script src="control.js?v=20261015m"></script>
+<script src="net.js?v=20261016a"></script>
+<script src="xlsx.js?v=20261016a"></script>
+<script src="zone-ops-export.js?v=20261016a"></script>
+<script src="access.js?v=20261016a"></script>
+<script src="zone-ops.js?v=20261016a"></script>
+<script src="control.js?v=20261016a"></script>
 </body>
 </html>
