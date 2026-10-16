@@ -6,7 +6,7 @@
 <meta name="referrer" content="no-referrer">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://script.google.com https://script.googleusercontent.com; style-src 'self'; connect-src https://hmg-write-bridge-poc.fieldmedicine1.workers.dev; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';">
 <title>HMG Attendance Control Center</title>
-<link rel="stylesheet" href="style.css?v=20261016d">
+<link rel="stylesheet" href="style.css?v=20261016e">
 </head>
 <body>
 <div class="wrap analytics-wrap">
@@ -95,8 +95,8 @@
       <div class="filter-bar">
         <div class="filter-field"><label for="zoMpZone">Zone</label><select id="zoMpZone"></select></div>
         <div class="filter-field"><label for="zoMpDate">Date</label><input type="date" id="zoMpDate"></div>
-        <div class="filter-field"><label for="zoMpArea">Event / Area</label><select id="zoMpArea"><option value="">(choose after Show plan)</option></select></div>
-        <div class="filter-field"><button id="zoMpShowBtn" class="btn-secondary">Show plan</button></div>
+        <div class="filter-field"><label for="zoMpArea">Event / Area</label><select id="zoMpArea"></select></div>
+        <div class="filter-field"><button id="zoMpShowBtn" class="btn-secondary">Reload plan</button></div>
       </div>
       <div id="zoMpView"></div>
     </div>
@@ -204,11 +204,11 @@
   </div>
 
 </div>
-<script src="net.js?v=20261016d"></script>
-<script src="xlsx.js?v=20261016d"></script>
-<script src="zone-ops-export.js?v=20261016d"></script>
-<script src="access.js?v=20261016d"></script>
-<script src="zone-ops.js?v=20261016d"></script>
-<script src="control.js?v=20261016d"></script>
+<script src="net.js?v=20261016e"></script>
+<script src="xlsx.js?v=20261016e"></script>
+<script src="zone-ops-export.js?v=20261016e"></script>
+<script src="access.js?v=20261016e"></script>
+<script src="zone-ops.js?v=20261016e"></script>
+<script src="control.js?v=20261016e"></script>
 </body>
 </html>

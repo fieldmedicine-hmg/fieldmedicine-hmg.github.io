@@ -623,42 +623,86 @@
   }
 
   // ---------------- Manual Manpower Plan / إضافة خطة قوى عاملة يدويًا (admin only) ----------------
-  var mpView = null;
-  function mpInput(val, w, ph) { var i = el('input'); i.type = 'text'; i.value = val === null || val === undefined ? '' : String(val); i.style.width = (w || 5) + 'em'; if (ph) i.placeholder = ph; return i; }
+  // The admin completes or creates the plan of a zone-day: expected headcount per event (Morning / Night or one figure), the missing
+  // Daily Log values, shift times and required working hours. The server writes each value where the system reads it and confirms it.
+  var mpView = null, mpSeq = 0; // every load / save gets a number; an answer that arrives after a newer request is ignored
+  function mpInput(val, w, ph, disabled, why) {
+    var i = el('input'); i.type = 'text'; i.value = val === null || val === undefined ? '' : String(val); i.style.width = (w || 5) + 'em';
+    if (ph) i.placeholder = ph;
+    if (disabled) { i.disabled = true; if (why) i.title = why; }
+    return i;
+  }
   function mpLoad(area) {
     var z = $('zoMpZone').value, d = $('zoMpDate').value;
     if (!z || !d) return;
+    var seq = ++mpSeq;
     busy = true; refreshGates(); clear($('zoMpView')); $('zoMpView').appendChild(el('div', 'meta', 'Reading the plan of ' + z + ' on ' + d + '…'));
-    opCall('manpowerPlanGet', { date: d, fromDate: d, toDate: d, opArgs: JSON.stringify({ zone: z, area: area || '' }) }).then(function (res) { busy = false; refreshGates(); mpRender(res); });
+    opCall('manpowerPlanGet', { date: d, fromDate: d, toDate: d, opArgs: JSON.stringify({ zone: z, area: area || '' }) }).then(function (res) { if (seq !== mpSeq) return; busy = false; refreshGates(); mpRender(res); });
   }
   function mpRender(res, note) {
     var host = $('zoMpView'); clear(host);
     if (!res.ok) { host.appendChild(el('div', 'report-error', res.error)); return; }
     mpView = res;
-    var sel = $('zoMpArea'), cur = res.area; clear(sel);
-    var o0 = el('option', null, '(no event - Daily Log rows only)'); o0.value = ''; sel.appendChild(o0);
+    // the zone's Settings events; the server picked the event (the first one when none was chosen)
+    var sel = $('zoMpArea'); clear(sel);
+    if (!res.events.length) { var on = el('option', null, '(no event in Settings for this zone)'); on.value = ''; sel.appendChild(on); }
     res.events.forEach(function (a) { var o = el('option', null, a); o.value = a; sel.appendChild(o); });
-    sel.value = cur;
-    if (note) host.appendChild(el('div', note.error ? 'report-error' : 'meta zo-scope', note.text));
-    var t = res.target;
-    host.appendChild(el('div', 'meta zo-scope', res.zone + ' · ' + res.date + ' · ' + res.mode + ' · plan ' + res.planStatus + (res.issues.length ? ' (' + res.issues.join('; ') + ')' : '') +
-      ' · expected ' + (t ? t.value + ' (' + t.source + (t.manualLines ? ' + ' + t.manualLines + ' manual line(s)' : '') + (t.stale ? ', STALE' : '') + ')' : 'none') + ' · approved actual ' + res.approvedActual + ' (attendance is never changed here)'));
+    sel.value = res.area || '';
+    if (note) host.appendChild(el('div', note.error ? 'report-error' : 'zo-saved', note.text));
+    var t = res.target, mn = res.mode === 'MORNING_NIGHT';
+    host.appendChild(el('div', 'meta zo-scope', res.zone + ' · ' + res.date + ' · ' + res.mode + ' · plan ' + res.planStatus +
+      ' · expected ' + (t ? t.value + (mn ? ' (morning ' + t.morning + ', night ' + t.night + ')' : '') + ' - ' + (t.manualLines ? (t.manualOnly ? 'manual plan (admin)' : 'Daily Log + manual plan') : t.source) + (t.stale ? ', STALE' : '') : 'none') +
+      ' · approved actual ' + res.approvedActual + ' (attendance is never changed here)'));
+    if (res.issues.length) host.appendChild(el('div', 'meta', 'Open plan issues: ' + res.issues.join('; ')));
     if (!res.configured) { host.appendChild(el('div', 'report-error', 'The zone has no operating mode on this date - configure it first (step 4, Configure).')); return; }
     if (res.final) host.appendChild(el('div', 'report-error', 'This zone-day is FINAL - its plan is read only.'));
     if (res.manualTarget) host.appendChild(el('div', 'report-error', 'A manual zone target is set (' + res.manualTarget + ') and takes precedence over the plan.'));
-    var mn = res.mode === 'MORNING_NIGHT', inputs = { completions: [], hours: [], withdraw: [] };
-    // 1. the zone-day's plan rows: Daily Log rows (incomplete ones can be completed) and the manual lines
+    var inputs = { completions: [], withdraw: [], shifts: [] };
+    // 1. the event: expected headcount + shift times + required working hours
+    if (res.area) {
+      host.appendChild(el('div', 'group-title', 'Event: ' + res.area));
+      var h = res.headcount, dis = !h.editable, hb = el('div', 'filter-bar zo-mp-form');
+      var field = function (label, input) { var f = el('div', 'filter-field'); f.appendChild(el('label', null, label)); f.appendChild(input); hb.appendChild(f); return input; };
+      if (mn) {
+        inputs.hM = field('Morning expected headcount', mpInput(h.morning, 5, '0', dis, h.reason));
+        inputs.hN = field('Night expected headcount', mpInput(h.night, 5, '0', dis, h.reason));
+        var tot = field('Expected total headcount', mpInput('', 5, '', true, 'Morning + Night'));
+        var upd = function () { var m = parseInt(inputs.hM.value, 10), n = parseInt(inputs.hN.value, 10); tot.value = isNaN(m) && isNaN(n) ? '' : String((isNaN(m) ? 0 : m) + (isNaN(n) ? 0 : n)); };
+        inputs.hM.addEventListener('input', upd); inputs.hN.addEventListener('input', upd); upd();
+      } else inputs.hC = field(h.mode === 'SINGLE' ? 'Single shift expected headcount' : 'Expected headcount', mpInput(h.count, 5, '0', dis, h.reason));
+      host.appendChild(hb);
+      if (dis) host.appendChild(el('div', 'disabled-reason', 'Headcount: ' + h.reason + '.'));
+      var t2 = el('table', 'data-table'), h2 = el('tr');
+      ['Shift', 'Shift start', 'Shift end', 'Required working hours (per employee)', 'Where it is kept'].forEach(function (x) { h2.appendChild(el('th', null, x)); });
+      t2.appendChild(h2);
+      res.shifts.forEach(function (x) {
+        var tr = el('tr'), sd = !x.timesEditable || res.final, rd = !x.requiredEditable || res.final;
+        tr.appendChild(el('td', null, x.label + (x.overnight ? ' (overnight)' : '')));
+        var si = { key: x.key, s: mpInput(x.start, 5, 'HH:MM', sd || x.key === 'FLEXIBLE', x.reason), e: mpInput(x.end, 5, 'HH:MM', sd || x.key === 'FLEXIBLE', x.reason), r: mpInput(x.required, 5, 'H:MM', rd, x.reason) };
+        [si.s, si.e, si.r].forEach(function (i) { var td = el('td'); td.appendChild(i); tr.appendChild(td); });
+        tr.appendChild(el('td', 'meta', (x.timesFrom ? 'times: ' + x.timesFrom : 'times: MISSING') + ' · hours: ' + (x.requiredFrom || 'MISSING') + (x.reason ? ' - ' + x.reason : '')));
+        t2.appendChild(tr); inputs.shifts.push(si);
+      });
+      if (!res.shifts.length) { var er = el('tr'), ec = el('td', 'meta', 'No shift is defined for this event in Settings.'); ec.colSpan = 5; er.appendChild(ec); t2.appendChild(er); }
+      var w2 = el('div', 'table-scroll'); w2.appendChild(t2); host.appendChild(w2);
+      var rb = el('div', 'filter-bar'), rf = el('input'), rt = el('input');
+      rf.type = 'date'; rt.type = 'date'; rf.value = res.date; rt.value = res.date;
+      [['Apply shift times / hours from', rf], ['to', rt]].forEach(function (p) { var f = el('div', 'filter-field'); f.appendChild(el('label', null, p[0])); f.appendChild(p[1]); rb.appendChild(f); });
+      host.appendChild(rb); inputs.rf = rf; inputs.rt = rt;
+    } else host.appendChild(el('div', 'report-error', 'Settings has no event for ' + res.zone + ' - add the event in Settings first.'));
+    // 2. the zone-day's plan rows: Daily Log rows (the incomplete ones can be completed) and the admin's lines
+    host.appendChild(el('div', 'group-title', 'Plan rows of ' + res.zone + ' on ' + res.date));
     var t1 = el('table', 'data-table'), hr = el('tr');
-    ['Plan row', 'Shift', 'Scheduled', 'Status', 'Complete the missing values', 'Entered by'].forEach(function (h) { hr.appendChild(el('th', null, h)); });
+    ['Plan row', 'Shift', 'Scheduled', 'Status', 'Complete the missing values', 'Entered by'].forEach(function (x) { hr.appendChild(el('th', null, x)); });
     t1.appendChild(hr);
-    if (!res.rows.length) { var er = el('tr'), ec = el('td', 'meta', 'No Daily Log row for this zone-day (completely missing plan) - add the requirement of each event below.'); ec.colSpan = 6; er.appendChild(ec); t1.appendChild(er); }
+    if (!res.rows.length) { var er1 = el('tr'), ec1 = el('td', 'meta', 'No plan row yet (no Daily Log row) - the headcount entered for each event above creates the plan.'); ec1.colSpan = 6; er1.appendChild(ec1); t1.appendChild(er1); }
     res.rows.forEach(function (r) {
       var tr = el('tr');
-      [r.external + (r.source === 'MANUAL' ? ' [MANUAL]' : ''), r.shift, r.scheduled === null ? '—' : r.scheduled, r.status].forEach(function (v) { tr.appendChild(el('td', null, v)); });
+      [r.external + (r.source === 'MANUAL_ADMIN' ? ' [MANUAL_ADMIN]' : ''), r.shift, r.scheduled === null ? '—' : r.scheduled, r.status].forEach(function (v) { tr.appendChild(el('td', null, v)); });
       var td = el('td');
       if (r.completable && res.completionAllowed) {
         var prev = res.lines.filter(function (l) { return l.kind === 'COMPLETION' && l.dailyLogRow === r.external; });
-        var pv = function (s) { var l = prev.filter(function (x) { return x.shift === s; })[0]; return l ? l.count : ''; };
+        var pv = function (sh) { var l = prev.filter(function (x) { return x.shift === sh; })[0]; return l ? l.count : ''; };
         var c = { external: r.external };
         if (r.needs === 'SHIFT_SPLIT') {
           td.appendChild(document.createTextNode('Morning ')); c.mi = mpInput(pv('MORNING')); td.appendChild(c.mi);
@@ -666,58 +710,33 @@
           if (r.fixedTotal !== null) td.appendChild(el('span', 'meta', ' (must add up to ' + r.fixedTotal + ')'));
         } else { td.appendChild(document.createTextNode((r.lineShift || 'ALL') + ' headcount ')); c.ci = mpInput(pv(r.lineShift)); td.appendChild(c.ci); }
         inputs.completions.push(c);
-      } else if (r.source === 'MANUAL') {
-        var line = res.lines.filter(function (l) { return r.external.indexOf(l.dailyLogRow || l.area) === 0 && l.shift === r.shift; })[0];
-        if (line && !res.final) { var cb = el('input'); cb.type = 'checkbox'; cb.value = line.entryId; var lb = el('label', 'zo-check'); lb.appendChild(cb); lb.appendChild(document.createTextNode(' withdraw')); td.appendChild(lb); inputs.withdraw.push(cb); }
+      } else if (r.source === 'MANUAL_ADMIN' && r.entryId && !res.final) {
+        var cb = el('input'); cb.type = 'checkbox'; cb.value = r.entryId; var lb = el('label', 'zo-check'); lb.appendChild(cb); lb.appendChild(document.createTextNode(' withdraw')); td.appendChild(lb); inputs.withdraw.push(cb);
       } else td.appendChild(el('span', 'meta', r.status === 'COUNTED' ? 'valid - kept' : (r.reason || '')));
       tr.appendChild(td);
       tr.appendChild(el('td', 'meta', r.enteredBy ? r.enteredBy + ' · ' + r.enteredAt : '—'));
       t1.appendChild(tr);
     });
     var w1 = el('div', 'table-scroll'); w1.appendChild(t1); host.appendChild(w1);
-    // 2. the chosen event: its headcount (zone-day without Daily Log rows) and its missing shift hours
-    if (res.area) {
-      host.appendChild(el('div', 'group-title', 'Event: ' + res.area));
-      var hb = el('div', 'filter-bar');
-      if (res.eventLinesAllowed) {
-        var ev = res.lines.filter(function (l) { return l.kind === 'EVENT' && l.area === res.area; }), evv = function (s) { var l = ev.filter(function (x) { return x.shift === s; })[0]; return l ? l.count : ''; };
-        if (mn) { hb.appendChild(document.createTextNode('Expected Morning ')); inputs.evM = mpInput(evv('MORNING')); hb.appendChild(inputs.evM); hb.appendChild(document.createTextNode(' Night ')); inputs.evN = mpInput(evv('NIGHT')); hb.appendChild(inputs.evN); }
-        else { hb.appendChild(document.createTextNode('Expected headcount ')); inputs.evC = mpInput(evv('ALL')); hb.appendChild(inputs.evC); }
-      } else hb.appendChild(el('span', 'meta', res.rows.some(function (r) { return r.source !== 'MANUAL'; }) ? 'This zone-day has Daily Log rows - complete those rows above (an event line next to them would count staff twice).' : 'Headcount cannot be entered here (see the notes above).'));
-      host.appendChild(hb);
-      var t2 = el('table', 'data-table'), h2 = el('tr');
-      ['Shift (Settings)', 'Start', 'End', 'Required hours', 'Source', 'Effective from', 'Effective to'].forEach(function (h) { h2.appendChild(el('th', null, h)); });
-      t2.appendChild(h2);
-      res.hours.forEach(function (x) {
-        var tr = el('tr');
-        tr.appendChild(el('td', null, x.shift || '(no shift name)'));
-        if (x.missing && x.editable && !res.final) {
-          var hi = { shift: x.shift, s: mpInput(x.start, 5, 'HH:MM'), e: mpInput(x.end, 5, 'HH:MM'), r: mpInput(x.source === 'Operational_Inputs' ? x.requiredHours : '', 5, 'H:MM'), f: el('input'), t: el('input') };
-          hi.f.type = 'date'; hi.f.value = x.effectiveFrom || res.date; hi.t.type = 'date'; hi.t.value = x.effectiveTo || '';
-          [hi.s, hi.e, hi.r].forEach(function (i) { var td = el('td'); td.appendChild(i); tr.appendChild(td); });
-          tr.appendChild(el('td', 'meta', x.source ? x.source : 'MISSING in Settings'));
-          [hi.f, hi.t].forEach(function (i) { var td = el('td'); td.appendChild(i); tr.appendChild(td); });
-          inputs.hours.push(hi);
-        } else {
-          [x.start || '—', x.end || '—', x.requiredHours || '—', x.source || (x.missing ? 'MISSING (Operational_Inputs row ' + x.inputRow + ')' : '—'), x.effectiveFrom || '', x.effectiveTo || ''].forEach(function (v) { tr.appendChild(el('td', null, v)); });
-        }
-        t2.appendChild(tr);
-      });
-      var w2 = el('div', 'table-scroll'); w2.appendChild(t2); host.appendChild(w2);
-    }
     if (res.final) return;
     var bar = el('div', 'filter-bar'), nt = mpInput('', 24, 'Note (optional)'), save = el('button', 'btn-primary', 'Save Manual Manpower Plan / حفظ الخطة');
+    save.id = 'zoMpSaveBtn';
     bar.appendChild(nt); bar.appendChild(save); host.appendChild(bar);
     save.addEventListener('click', function () {
-      var args = { zone: res.zone, area: res.area, note: nt.value.trim(), completions: inputs.completions.map(function (c) { return { external: c.external, morning: c.mi ? c.mi.value.trim() : '', night: c.ni ? c.ni.value.trim() : '', count: c.ci ? c.ci.value.trim() : '' }; }),
-        hours: inputs.hours.map(function (h) { return { shift: h.shift, start: h.s.value.trim(), end: h.e.value.trim(), required: h.r.value.trim(), effectiveFrom: h.f.value, effectiveTo: h.t.value }; }),
+      var v = function (i) { return i && !i.disabled ? i.value.trim() : ''; };
+      var args = { zone: res.zone, area: res.area, note: nt.value.trim(),
+        headcount: { morning: v(inputs.hM), night: v(inputs.hN), count: v(inputs.hC) },
+        shifts: inputs.shifts.map(function (x) { return { key: x.key, start: v(x.s), end: v(x.e), required: v(x.r) }; }),
+        hoursFrom: inputs.rf ? inputs.rf.value : res.date, hoursTo: inputs.rt ? inputs.rt.value : res.date,
+        completions: inputs.completions.map(function (c) { return { external: c.external, morning: c.mi ? c.mi.value.trim() : '', night: c.ni ? c.ni.value.trim() : '', count: c.ci ? c.ci.value.trim() : '' }; }),
         withdraw: inputs.withdraw.filter(function (c) { return c.checked; }).map(function (c) { return c.value; }) };
-      if (inputs.evM || inputs.evN || inputs.evC) args.eventLine = { morning: inputs.evM ? inputs.evM.value.trim() : '', night: inputs.evN ? inputs.evN.value.trim() : '', count: inputs.evC ? inputs.evC.value.trim() : '' };
-      save.disabled = true; busy = true; refreshGates();
+      save.disabled = true; save.textContent = 'Saving…'; busy = true; refreshGates();
+      var seq = ++mpSeq;
       opCall('manpowerPlanSave', { date: res.date, fromDate: res.date, toDate: res.date, opArgs: JSON.stringify(args) }).then(function (r2) {
-        busy = false; refreshGates(); save.disabled = false;
-        if (!r2.ok) { mpRender(mpView, { error: true, text: 'Not saved: ' + r2.error }); return; }
-        mpRender(r2, { text: r2.message });
+        busy = false; refreshGates();
+        if (seq !== mpSeq) { if (r2.ok) msg('Manual Manpower Plan saved for ' + res.zone + ' (' + res.date + ').'); else msg('Manual Manpower Plan NOT saved for ' + res.zone + ': ' + r2.error, true); return; } // another zone / event is open now
+        if (!r2.ok) { mpRender(r2.zone ? r2 : mpView, { error: true, text: 'NOT saved: ' + r2.error }); return; }
+        mpRender(r2, { text: r2.message }); // the server's read-back: exactly what is now stored and used
         if (last && last.date === res.date) msg('Manual Manpower Plan saved for ' + res.zone + ' - press "Load zones" to refresh the zone table.');
       });
     });
@@ -824,9 +843,10 @@
   $('zoRepXlsxBtn').addEventListener('click', function () { reportExcel($('zoRepXlsxBtn')); });
   $('zoSuppSubmitBtn').addEventListener('click', submitSupplement);
   $('zoMpShowBtn').addEventListener('click', function () { mpLoad($('zoMpArea').value); });
-  $('zoMpZone').addEventListener('change', function () { clear($('zoMpView')); $('zoMpArea').value = ''; refreshGates(); });
-  $('zoMpDate').addEventListener('change', function () { clear($('zoMpView')); refreshGates(); });
-  $('zoMpArea').addEventListener('change', function () { if (mpView) mpLoad($('zoMpArea').value); });
+  // choosing the zone or the date opens its plan at once (the first event of the zone is selected); choosing an event shows its form
+  $('zoMpZone').addEventListener('change', function () { refreshGates(); clear($('zoMpArea')); mpLoad(''); });
+  $('zoMpDate').addEventListener('change', function () { refreshGates(); if ($('zoMpZone').value) mpLoad($('zoMpArea').value); });
+  $('zoMpArea').addEventListener('change', function () { mpLoad($('zoMpArea').value); });
   if ($('periodTo')) $('periodTo').addEventListener('change', onDateChange);
   window.addEventListener('pageshow', function (ev) { if (ev.persisted) onDateChange(); }); // a back/forward restore must not show a stale date silently
   window.addEventListener('load', onDateChange); // control.js (loaded after this file) sets the review period - compare with it once it exists

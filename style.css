@@ -145,3 +145,5 @@ details.detail-group .table-scroll { border: none; border-top: 1px solid #d0d0d0
 .zo-zone { white-space: nowrap; }
 .zo-unassigned { flex-basis: 100%; color: #9a6a00; }
 .zo-approve { background: #2e7d4f; border-color: #2e7d4f; }
+.zo-saved { font-weight: 600; color: #2e7d4f; margin: 6px 0; }
+.zo-mp-form .filter-field label { font-size: 12px; }
