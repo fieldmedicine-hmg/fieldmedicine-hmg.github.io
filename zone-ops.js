@@ -118,7 +118,8 @@
     gate($('zoRepPdfBtn'), repReason || pickReason);
     gate($('zoRepXlsxBtn'), repReason || pickReason);
     gate($('zoRepApproveBtn'), repReason || pickReason || (!realZones.length ? 'Unassigned attendance is for review, not for distribution - tick the zone(s) to approve.' : ''));
-    gate($('zoSuppSubmitBtn'), noAccess || (busy ? 'Working…' : '') || (last && last.date === date ? '' : 'Load the zones of the operational date first (the claim is for that date).') || manualReason());
+    gate($('zoMpShowBtn'), noAccess || (busy ? 'Working…' : '') || (!$('zoMpZone').value ? 'Press "Load zones" first, then choose the zone.' : (!$('zoMpDate').value ? 'Choose the date.' : '')));
+    gate($('zoSuppSubmitBtn'), noAccess || (busy ? 'Working…' : '') || (last && last.date === date ? '' : 'Load the zones of the operational date first (the claim is for that date).'));
   }
   function daysBetween(a, b) { return Math.round((new Date(b + 'T12:00:00Z') - new Date(a + 'T12:00:00Z')) / 86400000) + 1; }
 
@@ -128,6 +129,7 @@
     var k = $('zoDate').value;
     $('zoDateLabel').textContent = k ? 'Operational day: ' + fmtDay(k) + ' (Asia/Riyadh). Daily targets, compliance, supplementary claims and Finalize use THIS one day.' : 'Choose the operational date.';
     if (reportDatesLinked) { $('zoRepFrom').value = k; $('zoRepTo').value = k; repLabel(); }
+    if ($('zoMpDate')) $('zoMpDate').value = k;
     if (last && last.date !== k) { clear($('zoHost')); clear($('zoDetail')); msg('The operational date changed - press "Load zones" for ' + k + '.'); }
     refreshGates();
   }
@@ -192,35 +194,15 @@
     ul.appendChild(el('span', 'meta', '(' + (res.unmappedRecords || 0) + ' record(s) on ' + res.date + ' whose Area has no zone - separate file, for review only)'));
     box.appendChild(ul);
   }
-  // Manual Attendance / تحضير يدوي (admin only): the form switches between a supplementary claim and a manual entry
-  function manualMode() { return $('zoSuppMode') && $('zoSuppMode').value === 'MANUAL'; }
-  function manualReason() {
-    if (!manualMode() || !last) return '';
-    var z = last.zones.filter(function (x) { return x.zone === $('zoSuppZone').value; })[0];
-    if (!z) return 'Choose the zone.';
-    if (z.report.status === 'FINAL') return 'The report of ' + z.zone + ' for ' + last.date + ' is FINAL.';
-    var ps = (z.content.plan && z.content.plan.status) || 'NONE';
-    if (z.content.target || ps !== 'NONE') return z.zone + ' has a staffing plan for ' + last.date + (z.content.target ? '' : ' (' + ps.replace(/_/g, ' ') + ')') + ' - Manual Attendance is for zone-days without a plan (use a supplementary claim).';
-    if (!$('zoSuppArea').value) return $('zoSuppArea').options.length ? 'Choose the event / area.' : 'Settings has no event for this zone - add the event to Settings first.';
-    return '';
-  }
-  function fillSuppAreas() {
-    var box = $('zoSuppAreaBox'), sel = $('zoSuppArea'), cur = sel.value;
-    box.hidden = !manualMode(); clear(sel);
-    ((last && last.areasByZone && last.areasByZone[$('zoSuppZone').value]) || []).forEach(function (a) { var o = el('option', null, a); o.value = a; sel.appendChild(o); });
-    if (cur && Array.prototype.some.call(sel.options, function (o) { return o.value === cur; })) sel.value = cur; // never keep another zone's event
-    $('zoSuppSubmitBtn').textContent = manualMode() ? 'Save Manual Attendance / حفظ التحضير اليدوي' : 'Submit Claim';
-    refreshGates();
-  }
   function fillZoneSelects(res) {
     fillZonePicker(res);
-    ['zoZone', 'zoSuppZone'].forEach(function (id) {
+    ['zoZone', 'zoSuppZone', 'zoMpZone'].forEach(function (id) {
       var sel = $(id), cur = sel.value; clear(sel);
-      if (id !== 'zoSuppZone') { var all = el('option', null, 'All zones'); all.value = ''; sel.appendChild(all); }
+      if (id === 'zoZone') { var all = el('option', null, 'All zones'); all.value = ''; sel.appendChild(all); }
       res.zones.forEach(function (z) { var o = el('option', null, z.zone + (z.content.config.mode === 'NOT_CONFIGURED' ? ' (not configured)' : '')); o.value = z.zone; sel.appendChild(o); });
       if (cur && res.zones.some(function (z) { return z.zone === cur; })) sel.value = cur;
     });
-    repScope(); fillSuppAreas(); refreshGates();
+    repScope(); refreshGates();
   }
   function shown(res) { var f = $('zoZone').value; return res.zones.filter(function (z) { return !f || z.zone === f; }); }
   function render(res) {
@@ -293,7 +275,7 @@
       ((pl.blankRows || []).length ? ' · Scheduled blank: ' + pl.blankRows.join(', ') : '') + ' - not a complete target');
     else if (pl.status === 'NO_ACTIVE_EVENT') parts.push('NO ACTIVE EVENT (' + (pl.ended || []).join(', ') + ') - no shortage');
     else parts.push('Plan ' + pl.status + ': Scheduled (G) ' + pl.scheduled + ' · Approved (F) ' + (pl.approvedPlan === null ? '—' : pl.approvedPlan) + (pl.discrepancy ? ' · PLAN DISCREPANCY ' + (pl.planDiff === null ? '' : (pl.planDiff > 0 ? '+' : '') + pl.planDiff) : ''));
-    parts.push('Expected: ' + (t ? (t.daily !== null && t.daily !== undefined ? t.daily : t.morning + ' + ' + t.night) + ' (' + (t.source || 'MANUAL') + (t.stale ? ', STALE' : '') + ')' : (pl.status === 'INCOMPLETE' ? 'INCOMPLETE' : (pl.status === 'NO_ACTIVE_EVENT' ? 'none (no active event)' : 'NO PLAN / بدون خطة'))));
+    parts.push('Expected: ' + (t ? (t.daily !== null && t.daily !== undefined ? t.daily : t.morning + ' + ' + t.night) + ' (' + (t.source || 'MANUAL') + (t.manualLines ? (t.manualOnly ? ' - MANUAL PLAN' : ' + MANUAL PLAN') : '') + (t.stale ? ', STALE' : '') + ')' : (pl.status === 'INCOMPLETE' ? 'INCOMPLETE' : (pl.status === 'NO_ACTIVE_EVENT' ? 'none (no active event)' : 'NO PLAN / بدون خطة'))));
     if (t && t.overrideStatus) parts.push(t.overrideStatus);
     return parts.join(' · ');
   }
@@ -501,7 +483,7 @@
     t.appendChild(hr);
     c.employees.forEach(function (e) {
       var tr = el('tr');
-      [e.name + (e.source === 'MANUAL' ? ' [MANUAL / يدوي]' : (e.source !== 'BIOMETRIC' ? ' [' + e.source + ']' : '')), e.code, e.shift, (e.originalIn || '—') + ' → ' + (e.originalOut || '—'), (e.approvedIn || '—') + ' → ' + (e.approvedOut || '—') + (e.timeSource !== 'ORIGINAL' ? ' (' + e.timeSource + ')' : ''),
+      [e.name + (e.source !== 'BIOMETRIC' ? ' [' + e.source + ']' : ''), e.code, e.shift, (e.originalIn || '—') + ' → ' + (e.originalOut || '—'), (e.approvedIn || '—') + ' → ' + (e.approvedOut || '—') + (e.timeSource !== 'ORIGINAL' ? ' (' + e.timeSource + ')' : ''),
         (e.actualHours || '—') + ' / ' + (e.requiredHours || '—'), e.varianceHours || ''].forEach(function (v) { tr.appendChild(el('td', null, v)); });
       tr.appendChild(el('td', 'st-' + e.hoursStatus, e.hoursStatus + (e.hoursCategory ? ' — ' + e.hoursCategory.replace('_', ' ') : '')));
       var ex = el('td');
@@ -640,6 +622,107 @@
     });
   }
 
+  // ---------------- Manual Manpower Plan / إضافة خطة قوى عاملة يدويًا (admin only) ----------------
+  var mpView = null;
+  function mpInput(val, w, ph) { var i = el('input'); i.type = 'text'; i.value = val === null || val === undefined ? '' : String(val); i.style.width = (w || 5) + 'em'; if (ph) i.placeholder = ph; return i; }
+  function mpLoad(area) {
+    var z = $('zoMpZone').value, d = $('zoMpDate').value;
+    if (!z || !d) return;
+    busy = true; refreshGates(); clear($('zoMpView')); $('zoMpView').appendChild(el('div', 'meta', 'Reading the plan of ' + z + ' on ' + d + '…'));
+    opCall('manpowerPlanGet', { date: d, fromDate: d, toDate: d, opArgs: JSON.stringify({ zone: z, area: area || '' }) }).then(function (res) { busy = false; refreshGates(); mpRender(res); });
+  }
+  function mpRender(res, note) {
+    var host = $('zoMpView'); clear(host);
+    if (!res.ok) { host.appendChild(el('div', 'report-error', res.error)); return; }
+    mpView = res;
+    var sel = $('zoMpArea'), cur = res.area; clear(sel);
+    var o0 = el('option', null, '(no event - Daily Log rows only)'); o0.value = ''; sel.appendChild(o0);
+    res.events.forEach(function (a) { var o = el('option', null, a); o.value = a; sel.appendChild(o); });
+    sel.value = cur;
+    if (note) host.appendChild(el('div', note.error ? 'report-error' : 'meta zo-scope', note.text));
+    var t = res.target;
+    host.appendChild(el('div', 'meta zo-scope', res.zone + ' · ' + res.date + ' · ' + res.mode + ' · plan ' + res.planStatus + (res.issues.length ? ' (' + res.issues.join('; ') + ')' : '') +
+      ' · expected ' + (t ? t.value + ' (' + t.source + (t.manualLines ? ' + ' + t.manualLines + ' manual line(s)' : '') + (t.stale ? ', STALE' : '') + ')' : 'none') + ' · approved actual ' + res.approvedActual + ' (attendance is never changed here)'));
+    if (!res.configured) { host.appendChild(el('div', 'report-error', 'The zone has no operating mode on this date - configure it first (step 4, Configure).')); return; }
+    if (res.final) host.appendChild(el('div', 'report-error', 'This zone-day is FINAL - its plan is read only.'));
+    if (res.manualTarget) host.appendChild(el('div', 'report-error', 'A manual zone target is set (' + res.manualTarget + ') and takes precedence over the plan.'));
+    var mn = res.mode === 'MORNING_NIGHT', inputs = { completions: [], hours: [], withdraw: [] };
+    // 1. the zone-day's plan rows: Daily Log rows (incomplete ones can be completed) and the manual lines
+    var t1 = el('table', 'data-table'), hr = el('tr');
+    ['Plan row', 'Shift', 'Scheduled', 'Status', 'Complete the missing values', 'Entered by'].forEach(function (h) { hr.appendChild(el('th', null, h)); });
+    t1.appendChild(hr);
+    if (!res.rows.length) { var er = el('tr'), ec = el('td', 'meta', 'No Daily Log row for this zone-day (completely missing plan) - add the requirement of each event below.'); ec.colSpan = 6; er.appendChild(ec); t1.appendChild(er); }
+    res.rows.forEach(function (r) {
+      var tr = el('tr');
+      [r.external + (r.source === 'MANUAL' ? ' [MANUAL]' : ''), r.shift, r.scheduled === null ? '—' : r.scheduled, r.status].forEach(function (v) { tr.appendChild(el('td', null, v)); });
+      var td = el('td');
+      if (r.completable && res.completionAllowed) {
+        var prev = res.lines.filter(function (l) { return l.kind === 'COMPLETION' && l.dailyLogRow === r.external; });
+        var pv = function (s) { var l = prev.filter(function (x) { return x.shift === s; })[0]; return l ? l.count : ''; };
+        var c = { external: r.external };
+        if (r.needs === 'SHIFT_SPLIT') {
+          td.appendChild(document.createTextNode('Morning ')); c.mi = mpInput(pv('MORNING')); td.appendChild(c.mi);
+          td.appendChild(document.createTextNode(' Night ')); c.ni = mpInput(pv('NIGHT')); td.appendChild(c.ni);
+          if (r.fixedTotal !== null) td.appendChild(el('span', 'meta', ' (must add up to ' + r.fixedTotal + ')'));
+        } else { td.appendChild(document.createTextNode((r.lineShift || 'ALL') + ' headcount ')); c.ci = mpInput(pv(r.lineShift)); td.appendChild(c.ci); }
+        inputs.completions.push(c);
+      } else if (r.source === 'MANUAL') {
+        var line = res.lines.filter(function (l) { return r.external.indexOf(l.dailyLogRow || l.area) === 0 && l.shift === r.shift; })[0];
+        if (line && !res.final) { var cb = el('input'); cb.type = 'checkbox'; cb.value = line.entryId; var lb = el('label', 'zo-check'); lb.appendChild(cb); lb.appendChild(document.createTextNode(' withdraw')); td.appendChild(lb); inputs.withdraw.push(cb); }
+      } else td.appendChild(el('span', 'meta', r.status === 'COUNTED' ? 'valid - kept' : (r.reason || '')));
+      tr.appendChild(td);
+      tr.appendChild(el('td', 'meta', r.enteredBy ? r.enteredBy + ' · ' + r.enteredAt : '—'));
+      t1.appendChild(tr);
+    });
+    var w1 = el('div', 'table-scroll'); w1.appendChild(t1); host.appendChild(w1);
+    // 2. the chosen event: its headcount (zone-day without Daily Log rows) and its missing shift hours
+    if (res.area) {
+      host.appendChild(el('div', 'group-title', 'Event: ' + res.area));
+      var hb = el('div', 'filter-bar');
+      if (res.eventLinesAllowed) {
+        var ev = res.lines.filter(function (l) { return l.kind === 'EVENT' && l.area === res.area; }), evv = function (s) { var l = ev.filter(function (x) { return x.shift === s; })[0]; return l ? l.count : ''; };
+        if (mn) { hb.appendChild(document.createTextNode('Expected Morning ')); inputs.evM = mpInput(evv('MORNING')); hb.appendChild(inputs.evM); hb.appendChild(document.createTextNode(' Night ')); inputs.evN = mpInput(evv('NIGHT')); hb.appendChild(inputs.evN); }
+        else { hb.appendChild(document.createTextNode('Expected headcount ')); inputs.evC = mpInput(evv('ALL')); hb.appendChild(inputs.evC); }
+      } else hb.appendChild(el('span', 'meta', res.rows.some(function (r) { return r.source !== 'MANUAL'; }) ? 'This zone-day has Daily Log rows - complete those rows above (an event line next to them would count staff twice).' : 'Headcount cannot be entered here (see the notes above).'));
+      host.appendChild(hb);
+      var t2 = el('table', 'data-table'), h2 = el('tr');
+      ['Shift (Settings)', 'Start', 'End', 'Required hours', 'Source', 'Effective from', 'Effective to'].forEach(function (h) { h2.appendChild(el('th', null, h)); });
+      t2.appendChild(h2);
+      res.hours.forEach(function (x) {
+        var tr = el('tr');
+        tr.appendChild(el('td', null, x.shift || '(no shift name)'));
+        if (x.missing && x.editable && !res.final) {
+          var hi = { shift: x.shift, s: mpInput(x.start, 5, 'HH:MM'), e: mpInput(x.end, 5, 'HH:MM'), r: mpInput(x.source === 'Operational_Inputs' ? x.requiredHours : '', 5, 'H:MM'), f: el('input'), t: el('input') };
+          hi.f.type = 'date'; hi.f.value = x.effectiveFrom || res.date; hi.t.type = 'date'; hi.t.value = x.effectiveTo || '';
+          [hi.s, hi.e, hi.r].forEach(function (i) { var td = el('td'); td.appendChild(i); tr.appendChild(td); });
+          tr.appendChild(el('td', 'meta', x.source ? x.source : 'MISSING in Settings'));
+          [hi.f, hi.t].forEach(function (i) { var td = el('td'); td.appendChild(i); tr.appendChild(td); });
+          inputs.hours.push(hi);
+        } else {
+          [x.start || '—', x.end || '—', x.requiredHours || '—', x.source || (x.missing ? 'MISSING (Operational_Inputs row ' + x.inputRow + ')' : '—'), x.effectiveFrom || '', x.effectiveTo || ''].forEach(function (v) { tr.appendChild(el('td', null, v)); });
+        }
+        t2.appendChild(tr);
+      });
+      var w2 = el('div', 'table-scroll'); w2.appendChild(t2); host.appendChild(w2);
+    }
+    if (res.final) return;
+    var bar = el('div', 'filter-bar'), nt = mpInput('', 24, 'Note (optional)'), save = el('button', 'btn-primary', 'Save Manual Manpower Plan / حفظ الخطة');
+    bar.appendChild(nt); bar.appendChild(save); host.appendChild(bar);
+    save.addEventListener('click', function () {
+      var args = { zone: res.zone, area: res.area, note: nt.value.trim(), completions: inputs.completions.map(function (c) { return { external: c.external, morning: c.mi ? c.mi.value.trim() : '', night: c.ni ? c.ni.value.trim() : '', count: c.ci ? c.ci.value.trim() : '' }; }),
+        hours: inputs.hours.map(function (h) { return { shift: h.shift, start: h.s.value.trim(), end: h.e.value.trim(), required: h.r.value.trim(), effectiveFrom: h.f.value, effectiveTo: h.t.value }; }),
+        withdraw: inputs.withdraw.filter(function (c) { return c.checked; }).map(function (c) { return c.value; }) };
+      if (inputs.evM || inputs.evN || inputs.evC) args.eventLine = { morning: inputs.evM ? inputs.evM.value.trim() : '', night: inputs.evN ? inputs.evN.value.trim() : '', count: inputs.evC ? inputs.evC.value.trim() : '' };
+      save.disabled = true; busy = true; refreshGates();
+      opCall('manpowerPlanSave', { date: res.date, fromDate: res.date, toDate: res.date, opArgs: JSON.stringify(args) }).then(function (r2) {
+        busy = false; refreshGates(); save.disabled = false;
+        if (!r2.ok) { mpRender(mpView, { error: true, text: 'Not saved: ' + r2.error }); return; }
+        mpRender(r2, { text: r2.message });
+        if (last && last.date === res.date) msg('Manual Manpower Plan saved for ' + res.zone + ' - press "Load zones" to refresh the zone table.');
+      });
+    });
+  }
+
   // ---------------- 7. finalize ----------------
   function askFinalize(z) {
     var host = $('zoDetail'); clear(host);
@@ -671,15 +754,15 @@
   function renderSupplements(res) {
     var host = $('zoSuppList'); clear(host);
     $('zoSuppDateLabel').textContent = 'Claims for operational day ' + fmtDay(res.date) + '.';
-    if (!res.supplements.length) { host.appendChild(el('div', 'meta', 'No supplementary claims or manual attendance for this date.')); return; }
+    if (!res.supplements.length) { host.appendChild(el('div', 'meta', 'No supplementary claims for this date.')); return; }
     var t = el('table', 'data-table'), hr = el('tr');
-    ['Type', 'Zone', 'Employee', 'Code', 'In', 'Out', 'Reason', 'Status', 'Submitted by', 'Verified by', ''].forEach(function (h) { hr.appendChild(el('th', null, h)); });
+    ['Zone', 'Employee', 'Code', 'Claimed in', 'Claimed out', 'Reason', 'Status', 'Submitted by', 'Verified by', ''].forEach(function (h) { hr.appendChild(el('th', null, h)); });
     t.appendChild(hr);
     res.supplements.forEach(function (s) {
       var tr = el('tr');
-      [s.mode === 'MANUAL' ? 'MANUAL / يدوي' : 'Claim', s.zone + (s.area ? ' · ' + s.area : ''), s.name, s.code, s.claimedIn || '—', s.claimedOut || '—', s.reason, s.status, s.submittedBy + ' · ' + s.submittedAt, s.verifiedBy ? s.verifiedBy + ' · ' + s.verifiedAt : '—'].forEach(function (v) { tr.appendChild(el('td', null, v)); });
+      [s.zone, s.name, s.code, s.claimedIn || '—', s.claimedOut || '—', s.reason, s.status, s.submittedBy + ' · ' + s.submittedAt, s.verifiedBy ? s.verifiedBy + ' · ' + s.verifiedAt : '—'].forEach(function (v) { tr.appendChild(el('td', null, v)); });
       var act = el('td');
-      if (s.status === 'SUBMITTED' || s.status === 'MANUAL') {
+      if (s.status === 'SUBMITTED') {
         var wb = el('button', 'btn-secondary', 'Withdraw');
         wb.addEventListener('click', function () { wb.disabled = true; opCall('supplementaryWithdraw', { supplementId: s.supplementId }).then(function (r) { if (!r.ok) { wb.disabled = false; msg('Error: ' + r.error, true); return; } load(); }); });
         act.appendChild(wb);
@@ -692,11 +775,9 @@
   function submitSupplement() {
     var p = { zone: $('zoSuppZone').value, employeeCode: $('zoSuppCode').value.trim(), employeeName: $('zoSuppName').value.trim(), designation: $('zoSuppDesig').value,
       shift: $('zoSuppShift').value.trim(), checkin: $('zoSuppIn').value, checkout: $('zoSuppOut').value, checkoutNextDay: $('zoSuppNext').checked ? 'true' : 'false', reason: $('zoSuppReason').value.trim() };
-    if (!p.zone || !p.employeeCode || !p.employeeName || !p.reason || (!p.checkin && !p.checkout)) { msg('Zone, employee code and name, at least one time and a reason are required.', true); return; }
-    var manual = manualMode();
-    if (manual) { p.area = $('zoSuppArea').value; if (!p.area) { msg('Choose the event / area.', true); return; } }
-    busy = true; refreshGates(); msg((manual ? 'Saving the manual attendance / حفظ التحضير اليدوي for ' : 'Submitting the supplementary claim for ') + $('zoDate').value + '…');
-    opCall(manual ? 'manualAttendanceSubmit' : 'supplementarySubmit', p).then(function (res) {
+    if (!p.zone || !p.employeeCode || !p.employeeName || !p.reason || (!p.checkin && !p.checkout)) { msg('Zone, employee code and name, at least one claimed time and a reason are required.', true); return; }
+    busy = true; refreshGates(); msg('Submitting the supplementary claim for ' + $('zoDate').value + '…');
+    opCall('supplementarySubmit', p).then(function (res) {
       busy = false; refreshGates();
       if (!res.ok) { msg('Error: ' + res.error, true); return; }
       ['zoSuppCode', 'zoSuppName', 'zoSuppShift', 'zoSuppIn', 'zoSuppOut', 'zoSuppReason'].forEach(function (id) { $(id).value = ''; }); $('zoSuppNext').checked = false;
@@ -742,8 +823,10 @@
   $('zoRepApproveBtn').addEventListener('click', function () { reportPdf($('zoRepApproveBtn'), true); }); // the click IS the approval (one explicit action)
   $('zoRepXlsxBtn').addEventListener('click', function () { reportExcel($('zoRepXlsxBtn')); });
   $('zoSuppSubmitBtn').addEventListener('click', submitSupplement);
-  ['zoSuppMode', 'zoSuppZone'].forEach(function (id) { $(id).addEventListener('change', fillSuppAreas); });
-  $('zoSuppArea').addEventListener('change', refreshGates);
+  $('zoMpShowBtn').addEventListener('click', function () { mpLoad($('zoMpArea').value); });
+  $('zoMpZone').addEventListener('change', function () { clear($('zoMpView')); $('zoMpArea').value = ''; refreshGates(); });
+  $('zoMpDate').addEventListener('change', function () { clear($('zoMpView')); refreshGates(); });
+  $('zoMpArea').addEventListener('change', function () { if (mpView) mpLoad($('zoMpArea').value); });
   if ($('periodTo')) $('periodTo').addEventListener('change', onDateChange);
   window.addEventListener('pageshow', function (ev) { if (ev.persisted) onDateChange(); }); // a back/forward restore must not show a stale date silently
   window.addEventListener('load', onDateChange); // control.js (loaded after this file) sets the review period - compare with it once it exists

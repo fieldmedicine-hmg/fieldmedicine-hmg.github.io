@@ -25,7 +25,7 @@
           x.unresolved || 0, diffText(x), x.status === 'NO_TARGET' ? (pl.status === 'INCOMPLETE' ? 'INCOMPLETE' : (pl.status === 'NO_ACTIVE_EVENT' ? 'NO ACTIVE EVENT' : 'NO PLAN / بدون خطة')) : (x.status === 'PENDING' ? 'PRELIMINARY' : x.status || ''), c.staffing.uniqueHeadcount, c.staffing.shiftCoverage, c.counts.hoursUnmatched, c.counts.pending + c.counts.notReviewed + c.counts.unresolved,
           c.counts.disagreements, ver, String(r.hash).slice(0, 16),
           // MANPOWER: expected (effective target) vs external plan - the external Present column is never the actual count
-          tg ? (tg.source || 'MANUAL') + (tg.stale ? ' (STALE)' : '') : (pl.status === 'INCOMPLETE' ? 'INCOMPLETE' : (pl.status === 'NO_ACTIVE_EVENT' ? 'NO ACTIVE EVENT' : 'NO PLAN / بدون خطة')), tg && tg.overrideStatus ? tg.overrideStatus : '', l[0] === 'DAILY TOTAL' ? (pl.approvedPlan === null || pl.approvedPlan === undefined ? '' : pl.approvedPlan) : '',
+          tg ? (tg.source || 'MANUAL') + (tg.manualLines ? (tg.manualOnly ? ' (MANUAL PLAN)' : ' + MANUAL PLAN') : '') + (tg.stale ? ' (STALE)' : '') : (pl.status === 'INCOMPLETE' ? 'INCOMPLETE' : (pl.status === 'NO_ACTIVE_EVENT' ? 'NO ACTIVE EVENT' : 'NO PLAN / بدون خطة')), tg && tg.overrideStatus ? tg.overrideStatus : '', l[0] === 'DAILY TOTAL' ? (pl.approvedPlan === null || pl.approvedPlan === undefined ? '' : pl.approvedPlan) : '',
           gOf === null || gOf === undefined ? '' : gOf, l[0] === 'DAILY TOTAL' && pl.planDiff !== null && pl.planDiff !== undefined ? pl.planDiff : '', l[0] === 'DAILY TOTAL' ? (pl.discrepancy ? 'DISCREPANCY' : (pl.status === 'VALID' ? 'OK' : '')) : '',
           pl.status, pl.freshnessLabel || '', l[0] === 'DAILY TOTAL' && pl.status === 'INCOMPLETE' ? pl.knownPartial : '']);
         if (x.status === 'UNMATCHED' || x.status === 'PENDING' || x.status === 'NO_TARGET') {
@@ -34,7 +34,7 @@
         }
       });
       c.employees.forEach(function (e) {
-        detail.push([c.date, c.zone, e.code, e.name, e.designation, e.source === 'MANUAL' ? 'MANUAL / يدوي (admin entry)' : e.source, e.shift, e.originalIn, e.originalOut, e.approvedIn, e.approvedOut, e.timeSource,
+        detail.push([c.date, c.zone, e.code, e.name, e.designation, e.source, e.shift, e.originalIn, e.originalOut, e.approvedIn, e.approvedOut, e.timeSource,
           e.actualHours, e.requiredHours, e.varianceHours, hoursMin(e.varianceMin), e.hoursStatus, e.hoursReason, (e.hoursCategory || '').replace('_', ' '), e.additionalHours || '',
           e.explanationStatus === 'NOT_REQUIRED' ? '' : e.explanationStatus, (e.explanations || []).map(function (x) { return x.name + ' (' + x.role + '): ' + x.decision + ' - ' + x.explanation; }).join(' | '),
           e.approvalState, e.officialDecision, e.finalStatus,
