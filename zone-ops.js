@@ -199,7 +199,8 @@
     var z = last.zones.filter(function (x) { return x.zone === $('zoSuppZone').value; })[0];
     if (!z) return 'Choose the zone.';
     if (z.report.status === 'FINAL') return 'The report of ' + z.zone + ' for ' + last.date + ' is FINAL.';
-    if (z.content.target) return z.zone + ' has a staffing plan for ' + last.date + ' - Manual Attendance is for zone-days without a plan (use a supplementary claim).';
+    var ps = (z.content.plan && z.content.plan.status) || 'NONE';
+    if (z.content.target || ps !== 'NONE') return z.zone + ' has a staffing plan for ' + last.date + (z.content.target ? '' : ' (' + ps.replace(/_/g, ' ') + ')') + ' - Manual Attendance is for zone-days without a plan (use a supplementary claim).';
     if (!$('zoSuppArea').value) return 'Choose the event / area (Settings has no event for this zone).';
     return '';
   }
