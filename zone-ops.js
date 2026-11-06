@@ -119,6 +119,7 @@
     gate($('zoRepXlsxBtn'), repReason || pickReason);
     gate($('zoRepApproveBtn'), repReason || pickReason || (!realZones.length ? 'Unassigned attendance is for review, not for distribution - tick the zone(s) to approve.' : ''));
     gate($('zoMpShowBtn'), noAccess || (busy ? 'Working…' : '') || (!$('zoMpZone').value ? 'Press "Load zones" first, then choose the zone.' : (!$('zoMpDate').value ? 'Choose the date.' : '')));
+    exGates();
     gate($('zoSuppSubmitBtn'), noAccess || (busy ? 'Working…' : '') || (last && last.date === date ? '' : 'Load the zones of the operational date first (the claim is for that date).'));
   }
   function daysBetween(a, b) { return Math.round((new Date(b + 'T12:00:00Z') - new Date(a + 'T12:00:00Z')) / 86400000) + 1; }
@@ -251,7 +252,7 @@
       tr.appendChild(el('td', null, c.staffing.uniqueHeadcount + ' / ' + c.staffing.shiftCoverage));
       tr.appendChild(el('td', c.counts.hoursUnmatched ? 'st-UNMATCHED' : (c.employees.length ? 'st-MATCHED' : null), hoursText(c.employees) + (c.counts.hoursExplanationMissing ? ' (' + c.counts.hoursExplanationMissing + ' need explanation)' : '')));
       tr.appendChild(el('td', null, c.counts.pending + c.counts.notReviewed + c.counts.unresolved));
-      tr.appendChild(el('td', null, (final ? 'FINAL v' + z.report.version + (z.report.liveChanged ? ' (live data changed since)' : '') + (z.report.integrityOk === false ? ' ⚠ INTEGRITY' : '') :
+      tr.appendChild(el('td', null, (final ? 'FINAL v' + z.report.version + (z.report.liveChanged ? ' (live data changed since)' : '') + (z.report.integrityOk === false ? ' ⚠ INTEGRITY' : '') + (z.report.excludedInSnapshot > 0 ? ' · FINAL snapshot issued before ' + z.report.excludedInSnapshot + ' current exclusion(s) — shown as issued' : '') :
         'DRAFT · ' + reviewText(c) + ' · ' + (c.blockers.length ? c.blockers.length + ' FINAL blocker(s) - see Details' : 'no blockers: ready to Finalize (not automatic)')) +
         (z.approval ? ' · APPROVED for distribution ' + z.approval.approvedAt + ' by ' + z.approval.approvedBy + (z.approval.current ? '' : ' (data changed since - approve again to distribute the current figures)') : '')));
       var act = el('td', 'zo-actions');
@@ -263,6 +264,7 @@
       tb.appendChild(tr);
     });
     t.appendChild(tb); wrap.appendChild(t); host.appendChild(wrap);
+    if (res.exclusionsActive > 0) host.appendChild(el('div', 'meta', res.exclusionsActive + ' employee exclusion(s) active — excluded employees are not counted.'));
     host.appendChild(el('div', 'meta', 'A normal shift extended with overtime is ONE employee and ONE shift; the extra time is an hours exception that needs the Zone Manager\'s explanation. Unique = distinct approved employees; coverage = approved employee-shifts.'));
     renderSupplements(res);
   }
@@ -742,6 +744,173 @@
     });
   }
 
+  // ---------------- Employee Exclusions / إدارة استثناءات الموظفين (admin only) ----------------
+  // The admin chooses Employee Codes to leave out of every attendance output (matched by code only). Every save is confirmed first and the
+  // screen shows the server's read-back. exSeq: an answer that arrives after a newer load / save is ignored.
+  var exView = null, exSeq = 0, exQuery = '', exReason = '', exAddSel = {}, exRemSel = {};
+  function exDay() { return $('zoDate').value || (A.todayRiyadh ? A.todayRiyadh() : new Date().toISOString().slice(0, 10)); }
+  function exCall(op, args) { var d = exDay(); return opCall(op, Object.assign({ date: d, fromDate: d, toDate: d }, args || {})); }
+  function exCount(o) { return Object.keys(o).filter(function (k) { return o[k]; }).length; }
+  function exGates() {
+    var authorized = A.state().code === 'AUTHORIZED', base = authorized ? (busy ? 'Working…' : '') : 'Access required - see step 1 above.';
+    gate($('zoExLoadBtn'), base);
+    gate($('zoExRemoveBtn'), base || (exCount(exRemSel) ? '' : 'Tick at least one excluded employee first.'));
+    gate($('zoExAddBtn'), base || (exCount(exAddSel) ? '' : 'Tick at least one employee below first.'));
+  }
+  function exLoad() {
+    var seq = ++exSeq, host = $('zoExView');
+    clear(host); host.appendChild(el('div', 'meta', 'Reading employees…'));
+    exCall('exclusionsGet').then(function (res) {
+      if (seq !== exSeq) return;
+      if (!res.ok) { clear(host); host.appendChild(el('div', 'report-error', res.error)); return; }
+      exRender(res);
+    });
+  }
+  function exMatches(e, q) {
+    if (!q) return true;
+    var c = String(e.code).toLowerCase();
+    if (c === q || c.indexOf(q) === 0) return true;
+    // codes are stored zero-padded to 4 digits ('0951'); typing 951 must still find it (display filter only - the exclusion itself is exact)
+    var cz = c.replace(/^0+(?=.)/, ''), qz = q.replace(/^0+(?=.)/, '');
+    if (/^\d+$/.test(qz) && cz.indexOf(qz) === 0) return true;
+    return [e.name].concat(e.names || []).some(function (n) { return n && String(n).toLowerCase().indexOf(q) !== -1; });
+  }
+  function exNameOf(code) {
+    var i, v = exView || {};
+    for (i = 0; i < (v.excluded || []).length; i++) if (v.excluded[i].code === code) return v.excluded[i].name;
+    for (i = 0; i < (v.employees || []).length; i++) if (v.employees[i].code === code) return v.employees[i].name;
+    return '';
+  }
+  function exTick(map, code) {
+    var cb = el('input'); cb.type = 'checkbox'; cb.value = code; cb.checked = !!map[code]; cb.setAttribute('aria-label', 'Select ' + code);
+    cb.addEventListener('change', function () { map[code] = cb.checked; exGates(); });
+    return cb;
+  }
+  function exDirectory() {
+    var box = $('zoExDirList'); if (!box || !exView) return;
+    clear(box);
+    var q = exQuery.trim().toLowerCase(), all = exView.employees.filter(function (e) { return exMatches(e, q); }), list = all.slice(0, 300);
+    var t = el('table', 'data-table'), hr = el('tr');
+    ['Select', 'Code', 'Name', 'Zones', 'Days', 'Last seen', 'Notes'].forEach(function (h) { hr.appendChild(el('th', null, h)); });
+    var th = el('thead'); th.appendChild(hr); t.appendChild(th);
+    var tb = el('tbody');
+    if (!list.length) { var er = el('tr'), ec = el('td', 'meta', 'No employee matches the search.'); ec.colSpan = 7; er.appendChild(ec); tb.appendChild(er); }
+    list.forEach(function (e) {
+      var tr = el('tr'); tr.setAttribute('data-code', e.code);
+      var ct = el('td'); if (e.excluded) ct.appendChild(el('b', null, 'Excluded')); else ct.appendChild(exTick(exAddSel, e.code));
+      tr.appendChild(ct); // the selection comes first so it is visible without scrolling on narrow screens
+      tr.appendChild(el('td', null, e.code));
+      var nt = el('td'); nt.setAttribute('dir', 'auto'); nt.appendChild(el('div', null, e.name));
+      var others = (e.names || []).filter(function (n) { return n !== e.name; });
+      if (others.length) { var o = el('div', 'meta', others.join(' · ')); o.setAttribute('dir', 'auto'); nt.appendChild(o); }
+      tr.appendChild(nt);
+      tr.appendChild(el('td', null, (e.zones || []).join(', ') || '—'));
+      tr.appendChild(el('td', null, e.days));
+      tr.appendChild(el('td', null, e.lastSeen || '—'));
+      tr.appendChild(el('td', 'meta', (e.flags || []).map(function (f) { return f.detail; }).join(' · ')));
+      tb.appendChild(tr);
+    });
+    t.appendChild(tb);
+    var w = el('div', 'table-scroll'); w.appendChild(t); box.appendChild(w);
+    box.appendChild(el('div', 'meta', all.length > 300 ? 'Showing the first 300 of ' + all.length + ' matches - type more of the code or name to narrow the list.' : all.length + ' employee(s) shown.'));
+  }
+  function exRender(res, note) {
+    var host = $('zoExView'); clear(host);
+    exView = res;
+    var isEx = {}; res.excluded.forEach(function (x) { isEx[x.code] = true; });
+    Object.keys(exAddSel).forEach(function (k) { if (isEx[k]) delete exAddSel[k]; });
+    Object.keys(exRemSel).forEach(function (k) { if (!isEx[k]) delete exRemSel[k]; });
+    if (note) host.appendChild(el('div', note.error ? 'report-error' : 'zo-saved', note.text));
+    host.appendChild(el('div', 'meta', res.count + ' employee(s) excluded · ' + res.directoryCount + ' employees in the attendance records · ' + res.rowsWithoutValidCode + ' record(s) without a valid code (never matched)'));
+    // excluded list
+    host.appendChild(el('div', 'group-title', 'Excluded employees (' + res.count + ')'));
+    var t = el('table', 'data-table'), hr = el('tr');
+    ['Select', 'Code', 'Name', 'Zones', 'Excluded by / at', 'Reason'].forEach(function (h) { hr.appendChild(el('th', null, h)); });
+    var th = el('thead'); th.appendChild(hr); t.appendChild(th);
+    var tb = el('tbody'), zonesOf = {}; res.employees.forEach(function (e) { zonesOf[e.code] = e.zones || []; });
+    if (!res.excluded.length) { var er = el('tr'), ec = el('td', 'meta', 'No employee is excluded.'); ec.colSpan = 6; er.appendChild(ec); tb.appendChild(er); }
+    res.excluded.forEach(function (x) {
+      var tr = el('tr'); tr.setAttribute('data-code', x.code);
+      var ct = el('td'); ct.appendChild(exTick(exRemSel, x.code)); tr.appendChild(ct);
+      tr.appendChild(el('td', null, x.code));
+      var nt = el('td', null, x.name); nt.setAttribute('dir', 'auto'); tr.appendChild(nt);
+      tr.appendChild(el('td', null, (x.zones || zonesOf[x.code] || []).join(', ') || '—'));
+      tr.appendChild(el('td', null, (x.excludedBy || '—') + ' · ' + (x.excludedAt || '—')));
+      var rt = el('td', null, x.reason || '—'); rt.setAttribute('dir', 'auto'); tr.appendChild(rt);
+      tb.appendChild(tr);
+    });
+    t.appendChild(tb);
+    var w = el('div', 'table-scroll'); w.appendChild(t); host.appendChild(w);
+    var rbar = el('div', 'filter-bar'), rf = el('div', 'filter-field'), rb = el('button', 'btn-secondary', 'Remove selected exclusion(s)'); rb.id = 'zoExRemoveBtn';
+    rb.addEventListener('click', function () { exAsk('remove'); }); rf.appendChild(rb); rbar.appendChild(rf); host.appendChild(rbar);
+    // directory
+    host.appendChild(el('div', 'group-title', 'Employees in the attendance records'));
+    var sbar = el('div', 'filter-bar'), sf = el('div', 'filter-field'), si = el('input');
+    si.type = 'text'; si.id = 'zoExSearch'; si.setAttribute('dir', 'auto'); si.setAttribute('autocomplete', 'off'); si.placeholder = 'Search by code or name / ابحث بالرمز أو الاسم'; si.style.width = '24em'; si.style.maxWidth = '100%'; si.value = exQuery;
+    si.addEventListener('input', function () { exQuery = si.value; exDirectory(); });
+    sf.appendChild(si); sbar.appendChild(sf); host.appendChild(sbar);
+    var dl = el('div'); dl.id = 'zoExDirList'; host.appendChild(dl);
+    var abar = el('div', 'filter-bar'), af = el('div', 'filter-field'), ri = el('input'), ab = el('button', 'btn-primary', 'Exclude selected employee(s)'); ab.id = 'zoExAddBtn';
+    ri.type = 'text'; ri.id = 'zoExReason'; ri.setAttribute('dir', 'auto'); ri.maxLength = 200; ri.placeholder = 'Reason (optional)'; ri.value = exReason; ri.style.width = '20em'; ri.style.maxWidth = '100%';
+    ri.addEventListener('input', function () { exReason = ri.value; });
+    var rff = el('div', 'filter-field'); rff.appendChild(ri); abar.appendChild(rff);
+    ab.addEventListener('click', function () { exAsk('add'); }); af.appendChild(ab); abar.appendChild(af); host.appendChild(abar);
+    var cf = el('div'); cf.id = 'zoExConfirm'; host.appendChild(cf);
+    // restricted history
+    var det = el('details'); det.id = 'zoExHistory'; det.appendChild(el('summary', null, 'Recent changes (admins only)'));
+    var h = res.history || [];
+    if (!h.length) det.appendChild(el('div', 'meta', 'No changes recorded yet.'));
+    else {
+      var ht = el('table', 'data-table'), hh = el('tr');
+      ['When', 'By', 'Action', 'Code', 'Name', 'Reason'].forEach(function (x) { hh.appendChild(el('th', null, x)); });
+      var hth = el('thead'); hth.appendChild(hh); ht.appendChild(hth);
+      var htb = el('tbody');
+      h.slice(0, 200).forEach(function (x) {
+        var tr = el('tr');
+        [x.at, x.by, x.action, x.code].forEach(function (v) { tr.appendChild(el('td', null, v)); });
+        var n = el('td', null, x.name); n.setAttribute('dir', 'auto'); tr.appendChild(n);
+        var r = el('td', null, x.reason || ''); r.setAttribute('dir', 'auto'); tr.appendChild(r);
+        htb.appendChild(tr);
+      });
+      ht.appendChild(htb); var hw = el('div', 'table-scroll'); hw.appendChild(ht); det.appendChild(hw);
+    }
+    host.appendChild(det);
+    exDirectory(); exGates();
+  }
+  function exAsk(kind) {
+    var box = $('zoExConfirm'); if (!box || !exView) return; clear(box);
+    var map = kind === 'add' ? exAddSel : exRemSel, codes = Object.keys(map).filter(function (k) { return map[k]; });
+    if (!codes.length) return;
+    var panel = el('div', 'confirm-box');
+    panel.appendChild(el('div', 'group-title', (kind === 'add' ? 'Exclude ' : 'Remove the exclusion of ') + codes.length + ' employee(s)?'));
+    var ul = el('ul'); codes.forEach(function (c) { var li = el('li', null, c + ' — ' + exNameOf(c)); li.setAttribute('dir', 'auto'); ul.appendChild(li); }); panel.appendChild(ul);
+    panel.appendChild(el('div', 'meta', kind === 'add' ? 'These employees will be removed from all attendance outputs (zones, review links, statistics, reports, PDF and Excel). Original fingerprints are not changed.' :
+      'These employees will appear again in attendance outputs. Original fingerprints are not changed.'));
+    var cancel = el('button', 'btn-secondary', 'Cancel'), go = el('button', 'btn-primary', 'Confirm'); cancel.id = 'zoExCancelBtn'; go.id = 'zoExConfirmBtn';
+    cancel.addEventListener('click', function () { clear(box); });
+    go.addEventListener('click', function () { go.disabled = true; cancel.disabled = true; exSave(kind, codes); });
+    panel.appendChild(cancel); panel.appendChild(go); box.appendChild(panel);
+  }
+  function exSave(kind, codes) {
+    var args = { add: [], remove: [], confirm: true, expectedRevision: exView.revision };
+    if (kind === 'add') args.add = codes.map(function (c) { return { code: c, reason: exReason.trim() }; }); else args.remove = codes;
+    var seq = ++exSeq; busy = true; refreshGates();
+    exCall('exclusionsSave', { opArgs: JSON.stringify(args) }).then(function (r) {
+      busy = false; refreshGates();
+      var late = seq !== exSeq;
+      if (!r.ok) {
+        var text = 'NOT saved: ' + r.error;
+        if (late) { msg(text, true); return; }
+        if (r.excluded && r.employees) { exRender(r, { error: true, text: text }); return; } // CHANGED_ELSEWHERE: the fresh view first
+        exRender(exView, { error: true, text: text }); return;
+      }
+      var s = r.saved || {}, text2 = 'Saved: ' + (s.added || []).length + ' excluded, ' + (s.removed || []).length + ' removed. Press “Load zones” to refresh the zone table and reports.';
+      if (late) { msg(text2); return; }
+      if (kind === 'add') { exAddSel = {}; exReason = ''; } else exRemSel = {};
+      exRender(r, { text: text2 });
+    });
+  }
+
   // ---------------- 7. finalize ----------------
   function askFinalize(z) {
     var host = $('zoDetail'); clear(host);
@@ -843,6 +1012,7 @@
   $('zoRepXlsxBtn').addEventListener('click', function () { reportExcel($('zoRepXlsxBtn')); });
   $('zoSuppSubmitBtn').addEventListener('click', submitSupplement);
   $('zoMpShowBtn').addEventListener('click', function () { mpLoad($('zoMpArea').value); });
+  $('zoExLoadBtn').addEventListener('click', exLoad);
   // choosing the zone or the date opens its plan at once (the first event of the zone is selected); choosing an event shows its form
   $('zoMpZone').addEventListener('change', function () { refreshGates(); clear($('zoMpArea')); mpLoad(''); });
   $('zoMpDate').addEventListener('change', function () { refreshGates(); if ($('zoMpZone').value) mpLoad($('zoMpArea').value); });
