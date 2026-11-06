@@ -747,7 +747,7 @@
   // ---------------- Employee Exclusions / إدارة استثناءات الموظفين (admin only) ----------------
   // The admin chooses Employee Codes to leave out of every attendance output (matched by code only). Every save is confirmed first and the
   // screen shows the server's read-back. exSeq: an answer that arrives after a newer load / save is ignored.
-  var exView = null, exSeq = 0, exQuery = '', exReason = '', exAddSel = {}, exRemSel = {};
+  var exView = null, exSeq = 0, exQuery = '', exShowAll = false, exReason = '', exAddSel = {}, exRemSel = {};
   function exDay() { return $('zoDate').value || (A.todayRiyadh ? A.todayRiyadh() : new Date().toISOString().slice(0, 10)); }
   function exCall(op, args) { var d = exDay(); return opCall(op, Object.assign({ date: d, fromDate: d, toDate: d }, args || {})); }
   function exCount(o) { return Object.keys(o).filter(function (k) { return o[k]; }).length; }
@@ -758,7 +758,7 @@
     gate($('zoExAddBtn'), base || (exCount(exAddSel) ? '' : 'Tick at least one employee below first.'));
   }
   function exLoad() {
-    var seq = ++exSeq, host = $('zoExView');
+    var seq = ++exSeq, host = $('zoExView'); exShowAll = false;
     clear(host); host.appendChild(el('div', 'meta', 'Reading employees…'));
     exCall('exclusionsGet').then(function (res) {
       if (seq !== exSeq) return;
@@ -789,7 +789,7 @@
   function exDirectory() {
     var box = $('zoExDirList'); if (!box || !exView) return;
     clear(box);
-    var q = exQuery.trim().toLowerCase(), all = exView.employees.filter(function (e) { return exMatches(e, q); }), list = all.slice(0, 300);
+    var q = exQuery.trim().toLowerCase(), all = exView.employees.filter(function (e) { return exMatches(e, q); }), list = exShowAll ? all : all.slice(0, 300);
     var t = el('table', 'data-table'), hr = el('tr');
     ['Select', 'Code', 'Name', 'Zones', 'Days', 'Last seen', 'Notes'].forEach(function (h) { hr.appendChild(el('th', null, h)); });
     var th = el('thead'); th.appendChild(hr); t.appendChild(th);
@@ -812,7 +812,11 @@
     });
     t.appendChild(tb);
     var w = el('div', 'table-scroll'); w.appendChild(t); box.appendChild(w);
-    box.appendChild(el('div', 'meta', all.length > 300 ? 'Showing the first 300 of ' + all.length + ' matches - type more of the code or name to narrow the list.' : all.length + ' employee(s) shown.'));
+    if (all.length > 300 && !exShowAll) {
+      box.appendChild(el('div', 'meta', 'Showing the first 300 of ' + all.length + ' matches - type more of the code or name to narrow the list.'));
+      var sb = el('button', 'btn-secondary', 'Show all ' + all.length + ' employees / عرض الكل'); sb.id = 'zoExShowAllBtn'; sb.type = 'button';
+      sb.addEventListener('click', function () { exShowAll = true; exDirectory(); }); box.appendChild(sb);
+    } else box.appendChild(el('div', 'meta', exShowAll && all.length > 300 ? 'All ' + all.length + ' employee(s) shown.' : all.length + ' employee(s) shown.'));
   }
   function exRender(res, note) {
     var host = $('zoExView'); clear(host);
@@ -846,8 +850,9 @@
     // directory
     host.appendChild(el('div', 'group-title', 'Employees in the attendance records'));
     var sbar = el('div', 'filter-bar'), sf = el('div', 'filter-field'), si = el('input');
-    si.type = 'text'; si.id = 'zoExSearch'; si.setAttribute('dir', 'auto'); si.setAttribute('autocomplete', 'off'); si.placeholder = 'Search by code or name / ابحث بالرمز أو الاسم'; si.style.width = '24em'; si.style.maxWidth = '100%'; si.value = exQuery;
+    si.type = 'text'; si.id = 'zoExSearch'; si.setAttribute('dir', 'auto'); si.setAttribute('autocomplete', 'off'); si.placeholder = 'e.g. 0951 / مثال 0951'; si.style.width = '24em'; si.style.maxWidth = '100%'; si.value = exQuery;
     si.addEventListener('input', function () { exQuery = si.value; exDirectory(); });
+    var sl = el('label', null, 'Search by Employee Code (or name) / ابحث برمز الموظف أو الاسم'); sl.setAttribute('for', 'zoExSearch'); sf.appendChild(sl);
     sf.appendChild(si); sbar.appendChild(sf); host.appendChild(sbar);
     var dl = el('div'); dl.id = 'zoExDirList'; host.appendChild(dl);
     var abar = el('div', 'filter-bar'), af = el('div', 'filter-field'), ri = el('input'), ab = el('button', 'btn-primary', 'Exclude selected employee(s)'); ab.id = 'zoExAddBtn';

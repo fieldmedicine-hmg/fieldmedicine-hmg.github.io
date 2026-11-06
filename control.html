@@ -6,7 +6,7 @@
 <meta name="referrer" content="no-referrer">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://script.google.com https://script.googleusercontent.com; style-src 'self'; connect-src https://hmg-write-bridge-poc.fieldmedicine1.workers.dev; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';">
 <title>HMG Attendance Control Center</title>
-<link rel="stylesheet" href="style.css?v=20261106b">
+<link rel="stylesheet" href="style.css?v=20261106c">
 </head>
 <body>
 <div class="wrap analytics-wrap">
@@ -101,15 +101,6 @@
       <div id="zoMpView"></div>
     </div>
 
-    <div class="zo-sub" id="zoExSection">
-      <div class="section-title">Employee Exclusions / إدارة استثناءات الموظفين</div>
-      <div class="meta">Excluded Employee Codes are left out of every attendance output: zones, zone matching / unassigned, Zone Manager review links and approvals, statistics, reports, PDF and Excel. Employees are matched by Employee Code only. The original fingerprints are never changed, and FINAL / approved snapshots stay as issued. Admin only.</div>
-      <div class="filter-bar">
-        <div class="filter-field"><button id="zoExLoadBtn" class="btn-secondary">Load employees</button></div>
-      </div>
-      <div id="zoExView"></div>
-    </div>
-
     <div class="zo-sub">
       <div class="section-title">6. Zone Reports &mdash; PDF and Excel</div>
       <div class="filter-bar">
@@ -153,6 +144,15 @@
         <div class="filter-field"><button id="zoSuppSubmitBtn" class="btn-primary">Submit Claim</button></div>
       </div>
       <div id="zoSuppList"></div>
+    </div>
+
+    <div class="zo-sub" id="zoExSection">
+      <div class="section-title">إدارة استثناءات الموظفين — Employee Exclusions</div>
+      <div class="meta">Excluded Employee Codes are left out of every attendance output: zones, zone matching / unassigned, Zone Manager review links and approvals, statistics, reports, PDF and Excel. Employees are matched by Employee Code only. The original fingerprints are never changed, and FINAL / approved snapshots stay as issued. Admin only.</div>
+      <div class="filter-bar">
+        <div class="filter-field"><button id="zoExLoadBtn" class="btn-secondary">Load employees</button></div>
+      </div>
+      <div id="zoExView"></div>
     </div>
   </div>
 
@@ -213,11 +213,11 @@
   </div>
 
 </div>
-<script src="net.js?v=20261106b"></script>
-<script src="xlsx.js?v=20261106b"></script>
-<script src="zone-ops-export.js?v=20261106b"></script>
-<script src="access.js?v=20261106b"></script>
-<script src="zone-ops.js?v=20261106b"></script>
-<script src="control.js?v=20261106b"></script>
+<script src="net.js?v=20261106c"></script>
+<script src="xlsx.js?v=20261106c"></script>
+<script src="zone-ops-export.js?v=20261106c"></script>
+<script src="access.js?v=20261106c"></script>
+<script src="zone-ops.js?v=20261106c"></script>
+<script src="control.js?v=20261106c"></script>
 </body>
 </html>
