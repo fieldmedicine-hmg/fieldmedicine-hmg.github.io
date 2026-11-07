@@ -180,34 +180,27 @@
   }
   var STAGE_TITLES = { SYNC: 'Sync failure', PROCESS: 'Processing failure', WRITE: 'Sheet write failure', DISCOVER: 'Discover failure' };
 
-  // ------------------------------------------------------------------ Process Attendance
-  function processAttendance(opts) {
+  // ------------------------------------------------------------------ shared refresh: sync + rebuild + verification
+  // Used by Process Attendance AND by Regenerate Link. Resolves with the LAST ensureDateRangeFresh response (incl. `rebuilt`
+  // and, on a current backend, `verification`); rejects with stageError objects. opts: { skipSync, isCurrent(): bool,
+  // rebuilt: [] (every rebuilt-day result of every pass is appended) }. A superseded run (isCurrent() false) resolves null.
+  function verificationFailure(v) {
+    var t = (v && v.totals) || {};
+    if (!v || !v.totals) {
+      return stageError('PROCESS', 'Attendance was processed but could not be checked against the source' + (v && v.error ? ' (' + String(v.error).slice(0, 160) + ')' : '') + '. Nothing was marked as ready - press Retry.');
+    }
+    var dates = (v.pendingDates && v.pendingDates.length ? v.pendingDates : (v.dates || []).filter(function (d) {
+      return d && d.date && ((d.missing || 0) + (d.extra || 0) + (d.pairingDiffs || 0) > 0);
+    }).map(function (d) { return d.date; }));
+    return stageError('PROCESS', 'Attendance was processed but does not yet match the source: ' + (t.missing || 0) + ' missing, ' + (t.extra || 0) + ' extra, ' +
+      (t.pairingDiffs || 0) + ' changed record(s)' + (dates.length ? ' (dates ' + dates.slice(0, 8).map(fmtDay).join(', ') + (dates.length > 8 ? ' and ' + (dates.length - 8) + ' more' : '') + ')' : '') +
+      '. Nothing was marked as ready - press Retry.');
+  }
+  function refreshPeriodData(from, to, onStage, opts) {
     opts = opts || {};
-    if (processing) return;
-    var from = byId('periodFrom').value, to = byId('periodTo').value;
-    var v = validatePeriod(from, to);
-    if (!v.ok) { showPeriodError(v.error); return; }
-    showPeriodError('');
-    if (v.days > WARN_DAYS && !opts.confirmed &&
-        !window.confirm('This period covers ' + v.days + ' days. Dates that are already up to date are skipped; the others are updated in safe batches, which can take several minutes the first time. Continue?')) return;
-    try { localStorage.setItem(PERIOD_KEY, JSON.stringify({ from: from, to: to })); } catch (e) { /* convenience only */ }
-
-    var myGen = ++generation;
-    processing = true;
-    setControlsDisabled(true);
-    clearChildren(byId('cardsHost'));
-    clearChildren(byId('periodSummary'));
-    var t0 = Date.now(), stageText = '', ticker = null, rebuilt = [];
-    function current() { return myGen === generation; }
-    function stage(text) { stageText = text; if (current()) setMsg(text); }
-    function stopTicker() { if (ticker) { clearInterval(ticker); ticker = null; } }
-    function finish() { stopTicker(); if (current()) { processing = false; setControlsDisabled(false); } }
-    ticker = setInterval(function () {
-      if (!current()) { stopTicker(); return; }
-      var sec = Math.round((Date.now() - t0) / 1000);
-      if (sec >= 4) setMsg(stageText + ' (' + sec + ' sec)');
-    }, 1000);
-
+    var rebuilt = opts.rebuilt || [];
+    function current() { return opts.isCurrent ? !!opts.isCurrent() : true; }
+    function stage(text) { if (onStage) onStage(text); }
     function runSync() {
       stage('Syncing attendance data…');
       // dateStr is required by the bridge's request contract; in syncOnly mode the server rebuilds nothing.
@@ -217,6 +210,7 @@
           throw stageError('SYNC', 'Syncing attendance data failed. ' + ((res.errorClass === 'NETWORK' || res.retryable)
             ? 'The data source did not respond - this is usually temporary.' : 'The data source reported a problem.'), { skippable: true });
         }
+        if (opts.onSync) opts.onSync(res);
         return res;
       }, function (e) {
         Net.logTech('period sync transport failure', e);
@@ -251,7 +245,8 @@
             if (!(res.rebuilt || []).length || passes > 64) throw stageError('PROCESS', 'Processing attendance stopped making progress (' + res.remaining + ' day' + (res.remaining === 1 ? '' : 's') + ' still to update). Please retry.');
             return next();
           }
-          return null;
+          if (res.verification && res.verification.ok === false) throw verificationFailure(res.verification);   // never "ready" on a mismatch
+          return res;
         }, function (e) {
           Net.logTech('period processing transport failure', e);
           throw stageError('PROCESS', 'Processing attendance failed. ' + Net.userMessage(e && e.kind));
@@ -259,6 +254,37 @@
       }
       return next();
     }
+
+    return (opts.skipSync ? Promise.resolve() : runSync()).then(function () { if (current()) return runChunks(); return null; });
+  }
+
+  // ------------------------------------------------------------------ Process Attendance
+  function processAttendance(opts) {
+    opts = opts || {};
+    if (processing) return;
+    var from = byId('periodFrom').value, to = byId('periodTo').value;
+    var v = validatePeriod(from, to);
+    if (!v.ok) { showPeriodError(v.error); return; }
+    showPeriodError('');
+    if (v.days > WARN_DAYS && !opts.confirmed &&
+        !window.confirm('This period covers ' + v.days + ' days. Dates that are already up to date are skipped; the others are updated in safe batches, which can take several minutes the first time. Continue?')) return;
+    try { localStorage.setItem(PERIOD_KEY, JSON.stringify({ from: from, to: to })); } catch (e) { /* convenience only */ }
+
+    var myGen = ++generation;
+    processing = true;
+    setControlsDisabled(true);
+    clearChildren(byId('cardsHost'));
+    clearChildren(byId('periodSummary'));
+    var t0 = Date.now(), stageText = '', ticker = null, rebuilt = [], verification = null, syncConflicts = null;
+    function current() { return myGen === generation; }
+    function stage(text) { stageText = text; if (current()) setMsg(text); }
+    function stopTicker() { if (ticker) { clearInterval(ticker); ticker = null; } }
+    function finish() { stopTicker(); if (current()) { processing = false; setControlsDisabled(false); } }
+    ticker = setInterval(function () {
+      if (!current()) { stopTicker(); return; }
+      var sec = Math.round((Date.now() - t0) / 1000);
+      if (sec >= 4) setMsg(stageText + ' (' + sec + ' sec)');
+    }, 1000);
 
     function runDiscover() {
       stage('Finding review groups…');
@@ -280,12 +306,11 @@
     }
 
     auditEvent('PERIOD_PROCESS_STARTED', from, to, 'days ' + v.days + (opts.skipSync ? ' (without sync)' : ''));
-    var chain = opts.skipSync ? Promise.resolve() : runSync();
-    chain.then(function () { if (current()) return runChunks(); })
-      .then(function () { if (current()) return runDiscover(); })
+    refreshPeriodData(from, to, stage, { skipSync: opts.skipSync, isCurrent: current, rebuilt: rebuilt, onSync: function (r) { syncConflicts = r && r.sourceConflicts ? r.sourceConflicts : null; } })
+      .then(function (last) { verification = last && last.verification && last.verification.ok === true ? last.verification : null; if (current()) return runDiscover(); })
       .then(function (data) {
         if (!data || !current()) return;
-        renderSummary(data, from, to);
+        renderSummary(data, from, to, verification, syncConflicts);
         var host = byId('cardsHost');
         data.cards.forEach(function (card) {
           host.appendChild(renderGroupCard(card, { from: from, to: to }));
@@ -327,7 +352,11 @@
     b.appendChild(el('div', 'stat-label', label));
     return b;
   }
-  function renderSummary(data, from, to) {
+  function conflictsLine(sc) {
+    var n = sc && sc.count > 0 ? sc.count : 0;
+    return n ? n + ' record' + (n === 1 ? '' : 's') + ' in the sheet differ' + (n === 1 ? 's' : '') + ' from Jotform — the sheet\'s corrected values were kept and are the ones used.' : '';
+  }
+  function renderSummary(data, from, to, verification, sourceConflicts) {
     var host = byId('periodSummary');
     clearChildren(host);
     var s = data.summary;
@@ -348,6 +377,13 @@
       var shown = s.daysWithoutData.slice(0, 8).map(fmtDay).join(', ') + (s.daysWithoutData.length > 8 ? ' and ' + (s.daysWithoutData.length - 8) + ' more' : '');
       box.appendChild(el('div', 'meta', 'No attendance recorded for: ' + shown + '.'));
     }
+    if (verification && verification.ok === true && verification.totals) {
+      var vt = verification.totals;
+      box.appendChild(el('div', 'meta summary-verified', 'Verified against the source: ' + vt.sourcePunches + ' punches → ' + vt.processedRecords + ' attendance records, ' + (vt.missing || 0) + ' missing'));
+      if (vt.suspectedWrongAction > 0) box.appendChild(el('div', 'notice', vt.suspectedWrongAction + ' possible check-in/check-out mix-up' + (vt.suspectedWrongAction === 1 ? '' : 's') + ' to review'));
+      if (vt.unassigned > 0) box.appendChild(el('div', 'meta', vt.unassigned + ' unassigned'));
+    }
+    if (conflictsLine(sourceConflicts)) box.appendChild(el('div', 'notice summary-conflicts', conflictsLine(sourceConflicts)));
     if (!data.cards.length) box.appendChild(el('div', 'meta', 'There are no review groups in this period.'));
     host.appendChild(box);
   }
@@ -595,12 +631,22 @@
       setBusy(true);
       var expected = String(card.reissueCount || 1);
       Array.prototype.forEach.call(actions.querySelectorAll('button'), function (b) { b.disabled = true; });
-      showCardMessage(msgLine, fromExpired ? 'Generating a new link…' : 'Regenerating the link…', false);
+      showCardMessage(msgLine, 'Refreshing attendance data…', false);
       function unlock() { setBusy(false); paint(); }
       function retry() { setBusy(false); doRegenerate(btn, fromExpired); }
+      // The link must show CURRENT data: sync + rebuild + verify this card's own period first. A failed refresh never regenerates.
+      refreshPeriodData(ctx.from, ctx.to, function (t) { showCardMessage(msgLine, t, false); }).then(function () {
+        showCardMessage(msgLine, fromExpired ? 'Generating a new link…' : 'Regenerating the link…', false);
+        return sendRegenerate();
+      }, function (err) {
+        unlock();
+        var m = (err && err.message) ? err.message : 'Attendance data could not be refreshed.';
+        showCardMessage(msgLine, 'Regeneration was not done: ' + m + ' The current link was not changed.', true, 'Retry Regenerate', retry);
+      });
+      function sendRegenerate() {
       // Retrying the SAME request (same expected revision) is safe: if the first attempt already landed, the server
       // hands back the link it created instead of making another.
-      bridgePost('prepareReview', periodPayload(card, ctx, { regenerate: 'true', expectedRevision: expected }), { timeoutMs: TIMEOUTS.write, retries: 1 }).then(function (res) {
+      return bridgePost('prepareReview', periodPayload(card, ctx, { regenerate: 'true', expectedRevision: expected }), { timeoutMs: TIMEOUTS.write, retries: 1 }).then(function (res) {
         if (!res.ok) {
           var kind = Net.classifyBackend(res);
           if (res.code === 'COMPLETED') { card.status = 'COMPLETED'; unlock(); showCardMessage(msgLine, 'This review is already completed. Its link can no longer be replaced.', false); return; }
@@ -620,6 +666,7 @@
         unlock();
         showCardMessage(msgLine, 'Regeneration failed: ' + Net.userMessage(e && e.kind) + ' The current link may be unchanged - press Retry to check.', true, 'Retry Regenerate', retry);
       });
+      }
     }
 
     paint();
@@ -766,8 +813,21 @@
         }
 
         resultHost.innerHTML = '';
+        var ver = res.verification;
+        if (ver && ver.ok !== true) {
+          // 2026-11-07: data was collected but the exact comparison against the source does not hold - never the success title.
+          var t = ver.totals || {};
+          resultHost.appendChild(el('div', 'meta report-error', ver.totals
+            ? 'Data was collected but the attendance for ' + reviewDate + ' does not yet match the source: ' + (t.missing || 0) + ' missing, ' + (t.extra || 0) + ' extra, ' + (t.pairingDiffs || 0) + ' changed. Press Retry.'
+            : 'Data was collected but the attendance for ' + reviewDate + ' could not be checked against the source. Press Retry.'));
+          if (conflictsLine(res.sourceConflicts)) resultHost.appendChild(el('div', 'meta progress-estimate-note', conflictsLine(res.sourceConflicts)));
+          showRetry(resultHost, 'Retry Data Collection');
+          return;
+        }
         var doneBox = el('div', 'control-card');
         doneBox.appendChild(el('div', 'group-title', 'Data refreshed successfully ✓'));
+        if (ver && ver.totals) doneBox.appendChild(el('div', 'meta summary-verified', 'Verified against the source: ' + ver.totals.sourcePunches + ' punches → ' + ver.totals.processedRecords + ' attendance records, ' + (ver.totals.missing || 0) + ' missing'));
+        if (conflictsLine(res.sourceConflicts)) doneBox.appendChild(el('div', 'meta', conflictsLine(res.sourceConflicts)));
         if (res.newRows !== null && res.newRows !== undefined) {
           doneBox.appendChild(el('div', 'meta', 'New records: ' + res.newRows.toLocaleString()));
         }

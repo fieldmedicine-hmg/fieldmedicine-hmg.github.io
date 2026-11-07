@@ -201,6 +201,7 @@
 
       var metaLine = el('div', 'meta', [r.designation, r.event, 'Check-in ' + r.checkin, 'Check-out ' + r.checkout, r.status].join(' · '));
       card.appendChild(metaLine);
+      if (r.changedSinceDecision === true) card.appendChild(el('div', 'plan-warn', 'Attendance changed after this decision (decided on: ' + String(r.decidedOnStatus || '') + '). Contact the office to re-confirm.'));
       if (r.hours) renderHours(card, r, data);
 
       if (r.decision === 'PENDING' && !data.completed) {
