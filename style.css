@@ -147,3 +147,31 @@ details.detail-group .table-scroll { border: none; border-top: 1px solid #d0d0d0
 .zo-approve { background: #2e7d4f; border-color: #2e7d4f; }
 .zo-saved { font-weight: 600; color: #2e7d4f; margin: 6px 0; }
 .zo-mp-form .filter-field label { font-size: 12px; }
+
+/* Hours approval (2026-11-09): neutral/amber states, alert card, buttons, modal */
+.hours-neutral { color: #7f5f01; }
+.hours-line { font-weight: 600; }
+.hours-alert { background: #fff6e5; border: 1px solid #f0d38a; border-right: 5px solid #d99a00; border-radius: 4px; padding: 10px 12px; margin-top: 8px; color: #6b4d00; font-size: 14px; line-height: 1.6; text-align: right; }
+.hours-alert-title { font-weight: bold; font-size: 15px; margin-bottom: 4px; }
+.hours-alert-facts { font-weight: 600; margin-top: 6px; }
+.hours-alert-state { margin-top: 4px; font-weight: 600; color: #274e13; }
+.hours-alert-note { margin-top: 4px; font-size: 13px; color: #7f6000; background: #fff2cc; border-radius: 3px; padding: 2px 6px; }
+.hours-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+.hours-actions button, .modal-actions button { margin: 0; min-height: 44px; font-size: 15px; }
+.hours-alert-msg { font-weight: 600; font-size: 13px; }
+button.btn-success { background: #2e7d4f; border-color: #2e7d4f; color: #fff; }
+button.btn-adjust { background: #1c5fa8; border-color: #1c5fa8; color: #fff; }
+button.btn-link { background: transparent; border: none; color: #1c5fa8; text-decoration: underline; font-weight: normal; padding: 8px 6px; }
+.hours-alert button:focus-visible, .modal-box button:focus-visible, .modal-box input:focus-visible, .modal-box select:focus-visible, .modal-box textarea:focus-visible { outline: 3px solid #0b3d75; outline-offset: 2px; }
+.hours-expl-title { width: 100%; margin-top: 0; }
+.modal-overlay { position: fixed; top: 0; right: 0; bottom: 0; left: 0; background: rgba(0, 0, 0, 0.55); z-index: 1000; overflow-y: auto; padding: 12px; display: flex; }
+.modal-box { background: #fff; border-radius: 6px; max-width: 480px; width: 100%; margin: auto; padding: 16px; text-align: right; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.3); }
+.modal-title { font-size: 18px; margin: 0 0 4px; }
+.modal-sub { color: #6b6e76; font-size: 13px; margin-bottom: 10px; }
+.modal-field { display: block; font-size: 13px; font-weight: bold; margin-top: 10px; }
+.modal-field input, .modal-field select, .modal-field textarea { display: block; width: 100%; font-size: 16px; padding: 8px 10px; margin-top: 4px; border: 1px solid #b0b0b0; border-radius: 4px; font-family: inherit; font-weight: normal; }
+.modal-preview { margin-top: 12px; padding: 8px 10px; background: #eef5fc; border: 1px solid #9fc5e8; border-radius: 4px; font-size: 14px; min-height: 20px; }
+.modal-error { color: #990000; font-size: 13px; margin-top: 6px; min-height: 16px; }
+.modal-msg { color: #990000; font-size: 13px; font-weight: bold; }
+.modal-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+@media (max-width: 640px) { .hours-actions button, .modal-actions button { flex: 1 1 100%; width: 100%; font-size: 15px; } .hours-alert { padding: 10px; } }
