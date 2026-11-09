@@ -370,7 +370,8 @@
 
   // One request per user click: the requestId lives in the extra object, so bridgeWrite's retries re-send the SAME id.
   function hoursExtra_(r, fields) {
-    var e = { employeeCode: r.employeeCode, hoursExplanation: 'true', requestId: newRequestId_() };
+    // Worker rule measured 2026-11-09: modify with reason ''/null/missing -> 400 'Missing required field: reason'; ' ' is forwarded and the backend trims it to "no reason".
+    var e = { employeeCode: r.employeeCode, hoursExplanation: 'true', requestId: newRequestId_(), reason: ' ' };
     if (r.workDate) e.workDate = r.workDate;
     Object.keys(fields).forEach(function (k) { e[k] = fields[k]; });
     return e;
