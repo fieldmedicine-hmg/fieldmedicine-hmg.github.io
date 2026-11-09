@@ -248,30 +248,278 @@
     }
   }
 
-  // PHASE 7: working hours vs the zone's required hours (computed by the server from the zone configuration). An hours
-  // exception (short / excess / overtime beyond the tolerance) needs the manager's explanation; approving the explanation
-  // never makes the hours compliant, and it is separate from the attendance decision above.
+  // PHASE 7 / hours approval: working hours vs the zone's required hours (computed by the server from the zone
+  // configuration). Hours are accepted automatically; the manager may confirm the recorded time, set the correct
+  // working time for an event (adjust the shift), or go back to automatic approval. All of it is separate from the
+  // attendance decision above. Every write returns a NEW r.hours which re-renders only this card's hours section.
+  function fmtMin_(m) { var s = m < 0 ? '−' : ''; m = Math.abs(m); return s + Math.floor(m / 60) + ':' + ('0' + (m % 60)).slice(-2); }
+  // Unicode LTR isolate: keeps numbers, times, signed differences and dates reading left-to-right inside Arabic text.
+  function ltr_(x) { return '\u2066' + x + '\u2069'; }
+  function fmtDiff_(m) { return m > 0 ? '+' + fmtMin_(m) : fmtMin_(m); }
+  function toMin_(hhmm) { var m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || '')); return m ? (+m[1]) * 60 + (+m[2]) : null; }
+  function hhmmOf_(s) { var m = /(\d{1,2}):(\d{2})\s*$/.exec(String(s || '')); return m ? ('0' + m[1]).slice(-2) + ':' + m[2] : ''; }
+  function nextDay_(ymd) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymd || '')); if (!m) return '';
+    var d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3] + 1));
+    return d.getUTCFullYear() + '-' + ('0' + (d.getUTCMonth() + 1)).slice(-2) + '-' + ('0' + d.getUTCDate()).slice(-2);
+  }
+  function newRequestId_() {
+    var a = '';
+    try { var u = new Uint8Array(16); window.crypto.getRandomValues(u); for (var i = 0; i < u.length; i++) a += ('0' + u[i].toString(16)).slice(-2); }
+    catch (e) { a = ''; }
+    if (!a) { for (var j = 0; j < 32; j++) a += Math.floor(Math.random() * 16).toString(16); }
+    return 'h' + a;
+  }
+  function linkValid_(data) { return !data.expiresAt || new Date(data.expiresAt) > new Date(); }
+  function hoursFailMsg_(res) {
+    var kind = Net.classifyBackend(res);
+    if (res && res.code === 'FINAL') return 'أصبح تقرير هذا اليوم نهائيًا (FINAL) ولا يمكن تعديل الساعات';
+    if (res && res.code === 'NOT_COMPUTABLE') return 'بصمة الدخول أو الخروج ناقصة — لا يمكن اعتماد أو تعديل الساعات';
+    if (res && res.code === 'INVALID_TIME' && res.error) return String(res.error);
+    return Net.userMessage(kind, res && res.error);
+  }
+
+  function hoursLine_(h, wd) {
+    var v = h.view, adj = v && v.adjusted;
+    var req = adj ? (adj.required + ' (adjusted ' + adj.start + '–' + adj.end + (adj.endDate && wd && adj.endDate !== wd ? ' +1d' : '') + '; plan ' + adj.planRequired + ')') : (h.required || '—');
+    var state, cls;
+    if (v) {
+      state = String(v.label || '') + (v.kindLabel ? ' — ' + v.kindLabel : '');
+      cls = (v.status === 'MATCHED' || v.status === 'APPROVED') ? 'hours-ok' : (v.status === 'NOT_APPROVED' ? 'hours-bad' : 'hours-neutral');
+    } else {
+      cls = h.status === 'MATCHED' ? 'hours-ok' : (h.status === 'UNMATCHED' ? 'hours-neutral' : 'meta');
+      state = h.status === 'UNMATCHED' ? String(h.category || '').replace('_', ' ') : h.status === 'MATCHED' ? 'MATCHED (within ±' + h.toleranceMin + ' min)' : String(h.status || '').replace('_', ' ');
+    }
+    return el('div', 'meta hours-line ' + cls, 'Hours ' + (h.actual || '—') + ' / required ' + req + (h.variance ? ' (' + h.variance + ')' : '') + ' · ' + state);
+  }
+
+  function stateLine_(h, wd) {
+    var v = h.view; if (!v) return null;
+    var by = v.by || '', at = v.at || '', who = ' — بواسطة ' + ltr_(by) + (at ? ' · ' + ltr_(at) : '');
+    if (v.kind === 'AUTO_APPROVED') return 'الحالة: مقبول تلقائيًا (Auto-approved)';
+    if (v.kind === 'MANAGER_CONFIRMED') return '✓ تم اعتماد الوقت المسجل' + who;
+    if (v.kind === 'MANAGER_EXPLAINED') return '✓ معتمد بتبرير المدير — ' + ltr_(by) + (at ? ' · ' + ltr_(at) : '');
+    if (v.kind === 'SHIFT_ADJUSTED') {
+      var a = v.adjusted || {};
+      return 'تم تعديل وقت العمل إلى ' + ltr_(a.start + '–' + a.end) + (a.endDate && wd && a.endDate !== wd ? ' (اليوم التالي)' : '') + who;
+    }
+    if (v.kind === 'MANAGER_REJECTED') return 'لم تُعتمد الساعات (رفض صريح)' + (v.reason ? ': ' + v.reason : '') + ' — ' + ltr_(by);
+    return null;
+  }
+
+  function factsLine_(h) {
+    var p = h.plan || { required: h.required, variance: h.variance };
+    var t = 'الساعات المسجلة ' + ltr_(h.actual || '—') + ' · المطلوبة حسب الشفت ' + ltr_(p.required || '—') + ' · الفرق ' + ltr_(String(p.variance || '—').replace('-', '−'));
+    var adj = h.view && h.view.adjusted;
+    if (adj) t += ' · بعد التعديل: المطلوب ' + ltr_(adj.required) + ' · الفرق ' + ltr_(String(h.variance || '—').replace('-', '−'));
+    return t;
+  }
+
   function renderHours(card, r, data) {
-    var h = r.hours;
-    var cls = h.status === 'MATCHED' ? 'hours-ok' : (h.status === 'UNMATCHED' ? 'hours-bad' : 'meta');
-    var line = el('div', 'meta ' + cls, 'Hours ' + (h.actual || '—') + ' / required ' + (h.required || '—') + (h.variance ? ' (' + h.variance + ')' : '') + ' · ' +
-      (h.status === 'UNMATCHED' ? 'UNMATCHED - ' + String(h.category || '').replace('_', ' ') : h.status === 'MATCHED' ? 'MATCHED (within ±' + h.toleranceMin + ' min)' : h.status.replace('_', ' ')));
-    card.appendChild(line);
-    if (!h.explanationRequired) return;
+    var wrap = el('div', 'hours-sec');
+    card.appendChild(wrap);
+    fillHours_({ card: card, wrap: wrap, r: r, data: data }, '');
+  }
+
+  function fillHours_(ctx, flash) {
+    var r = ctx.r, data = ctx.data, h = r.hours, wrap = ctx.wrap, wd = h.workDate || r.workDate || '';
+    while (wrap.firstChild) wrap.removeChild(wrap.firstChild);
+    wrap.appendChild(hoursLine_(h, wd));
+    var valid = linkValid_(data);
+    if (h.canDecide && r.decision !== 'REJECTED') wrap.appendChild(buildHoursAlert_(ctx, valid, flash));
+    else if (flash) wrap.appendChild(el('div', 'meta hours-flash', flash));
+    if (h.explanationRequired || h.explanationOptional) wrap.appendChild(buildExplanation_(ctx, valid));
+  }
+
+  function buildHoursAlert_(ctx, valid, flash) {
+    var r = ctx.r, h = r.hours, v = h.view || {}, wd = h.workDate || r.workDate || '';
+    var box = el('div', 'hours-alert'); box.setAttribute('dir', 'rtl'); box.setAttribute('lang', 'ar');
+    box.appendChild(el('div', 'hours-alert-title', '⚠️ اختلاف ساعات العمل عن الشفت الأساسي'));
+    box.appendChild(el('div', 'hours-alert-body', 'قد يكون الموظف مكلفًا بفعالية أو خارج الزون بأوقات مختلفة. الوقت مقبول تلقائيًا في التقرير، ويمكنك تأكيد الوقت المسجل أو تحديد وقت العمل الصحيح للفعالية.'));
+    box.appendChild(el('div', 'hours-alert-facts', factsLine_(h)));
+    var st = stateLine_(h, wd);
+    if (st) box.appendChild(el('div', 'hours-alert-state', st));
+    if (v.note) box.appendChild(el('div', 'hours-alert-note', String(v.note)));
+    var msg = el('span', 'hours-alert-msg', flash || ''); msg.setAttribute('aria-live', 'polite');
+    if (valid) {
+      var actions = el('div', 'hours-actions');
+      var confirmBtn = el('button', 'btn-success', '✓ اعتماد الوقت المسجل');
+      confirmBtn.type = 'button';
+      confirmBtn.addEventListener('click', function () {
+        sendHours_(ctx, hoursExtra_(r, { hoursDecision: 'CONFIRM_RECORDED' }), '✓ تم اعتماد الوقت المسجل', actions, msg);
+      });
+      actions.appendChild(confirmBtn);
+      var adjustBtn = el('button', 'btn-adjust', 'تعديل وقت العمل');
+      adjustBtn.type = 'button';
+      adjustBtn.addEventListener('click', function () { openAdjustModal_(ctx, adjustBtn); });
+      actions.appendChild(adjustBtn);
+      if ((v.source === 'MANAGER' && v.kind !== 'MANAGER_EXPLAINED') || h.decision) {
+        var revertBtn = el('button', 'btn-link', '↺ العودة للاعتماد التلقائي');
+        revertBtn.type = 'button';
+        revertBtn.addEventListener('click', function () {
+          if (!window.confirm('هل تريد العودة إلى الاعتماد التلقائي وإلغاء قرارك السابق؟')) return;
+          sendHours_(ctx, hoursExtra_(r, { hoursDecision: 'REVERT_AUTO' }), '✓ تمت العودة إلى الاعتماد التلقائي', actions, msg);
+        });
+        actions.appendChild(revertBtn);
+      }
+      actions.appendChild(msg);
+      box.appendChild(actions);
+    } else box.appendChild(msg);
+    return box;
+  }
+
+  // One request per user click: the requestId lives in the extra object, so bridgeWrite's retries re-send the SAME id.
+  function hoursExtra_(r, fields) {
+    var e = { employeeCode: r.employeeCode, hoursExplanation: 'true', requestId: newRequestId_() };
+    if (r.workDate) e.workDate = r.workDate;
+    Object.keys(fields).forEach(function (k) { e[k] = fields[k]; });
+    return e;
+  }
+
+  // Shared write path. guardEl carries data-busy (double-click guard); the message is shown where the click came from.
+  function sendHours_(ctx, extra, okMsg, guardEl, msgEl, hooks) {
+    hooks = hooks || {};
+    if (guardEl.getAttribute('data-busy') === '1') return;
+    var btns = guardEl.querySelectorAll('button');
+    function setBusy(on) {
+      Array.prototype.forEach.call(btns, function (b) { b.disabled = on; });
+      if (on) guardEl.setAttribute('data-busy', '1'); else guardEl.removeAttribute('data-busy');
+      if (hooks.busy) hooks.busy(on);
+    }
+    setBusy(true); msgEl.textContent = 'جارٍ الحفظ…';
+    bridgeWrite('modify', extra).then(function (res) {
+      if (res && res.ok) {
+        if (res.hours) ctx.r.hours = res.hours;
+        fillHours_(ctx, okMsg); // re-render first, so the modal can return focus to the NEW adjust button
+        if (hooks.done) hooks.done();
+        return;
+      }
+      var kind = Net.classifyBackend(res || {});
+      if (Net.isTerminalTokenKind(kind)) { if (hooks.done) hooks.done(); presentFailure(kind, res); return; }
+      setBusy(false); msgEl.textContent = hoursFailMsg_(res || {});
+    }).catch(function (e) {
+      Net.logTech('hours write failed', e);
+      setBusy(false); msgEl.textContent = Net.userMessage(e && e.kind, e && e.message);
+      if (hooks.networkFailed) hooks.networkFailed(); else resyncAfterUncertainWrite();
+    });
+  }
+
+  function openAdjustModal_(ctx, opener) {
+    var r = ctx.r, h = r.hours, wd = h.workDate || r.workDate || '', nd = nextDay_(wd);
+    var dec = h.decision || {}, plan = h.plan || {};
+    var overlay = el('div', 'modal-overlay');
+    var box = el('div', 'modal-box'); box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true'); box.setAttribute('dir', 'rtl'); box.setAttribute('lang', 'ar');
+    var titleId = 'adj-title-' + String(r.employeeCode).replace(/[^A-Za-z0-9_-]/g, '') + '-' + (wd || 'x'); box.setAttribute('aria-labelledby', titleId);
+    var title = el('h2', 'modal-title', 'تعديل وقت العمل المطلوب'); title.id = titleId;
+    box.appendChild(title);
+    box.appendChild(el('div', 'modal-sub', String(r.employeeName) + ' (' + ltr_('#' + String(r.employeeCode)) + ') · يوم التشغيل: ' + ltr_(wd || '—')));
+
+    var fStart = el('label', 'modal-field', 'وقت البداية');
+    var inStart = el('input'); inStart.type = 'time'; inStart.setAttribute('dir', 'ltr'); inStart.required = true;
+    inStart.value = dec.start || plan.start || hhmmOf_(h.recordedIn); fStart.appendChild(inStart); box.appendChild(fStart);
+    var fEnd = el('label', 'modal-field', 'وقت النهاية');
+    var inEnd = el('input'); inEnd.type = 'time'; inEnd.setAttribute('dir', 'ltr'); inEnd.required = true;
+    inEnd.value = dec.end || plan.end || hhmmOf_(h.recordedOut); fEnd.appendChild(inEnd); box.appendChild(fEnd);
+    var fDate = el('label', 'modal-field', 'تاريخ النهاية');
+    var selDate = el('select');
+    var o1 = el('option', null, 'نفس اليوم' + (wd ? ' (' + ltr_(wd) + ')' : '')); o1.value = wd || 'same';
+    var o2 = el('option', null, 'اليوم التالي' + (nd ? ' (' + ltr_(nd) + ')' : '')); o2.value = nd || 'next';
+    selDate.appendChild(o1); selDate.appendChild(o2); fDate.appendChild(selDate); box.appendChild(fDate);
+    var fReason = el('label', 'modal-field', 'السبب');
+    var reason = el('textarea'); reason.maxLength = 500; reason.rows = 2; reason.placeholder = 'سبب التعديل (اختياري) — مثال: فعالية WWE';
+    reason.value = dec.reason || ''; fReason.appendChild(reason); box.appendChild(fReason);
+
+    var preview = el('div', 'modal-preview'); preview.setAttribute('aria-live', 'polite'); box.appendChild(preview);
+    var errEl = el('div', 'modal-error'); box.appendChild(errEl);
+    var msg = el('div', 'modal-msg'); msg.setAttribute('aria-live', 'polite'); box.appendChild(msg);
+    var actions = el('div', 'modal-actions');
+    var save = el('button', 'btn-adjust', 'حفظ التعديل'); save.type = 'button';
+    var cancel = el('button', 'btn-secondary', 'إلغاء'); cancel.type = 'button';
+    actions.appendChild(save); actions.appendChild(cancel); box.appendChild(actions);
+    overlay.appendChild(box);
+
+    if (dec.endDate) selDate.value = dec.endDate === wd ? o1.value : o2.value;
+    var userPickedDate = !!dec.endDate;
+
+    function required() {
+      var s = toMin_(inStart.value), e = toMin_(inEnd.value);
+      if (s === null || e === null) return { ok: false, err: 'أدخل وقت البداية ووقت النهاية.' };
+      var next = selDate.value === o2.value && o1.value !== o2.value;
+      var req = (next ? 1440 : 0) + e - s;
+      if (req <= 0) return { ok: false, err: 'وقت النهاية يجب أن يكون بعد وقت البداية (اختر اليوم التالي إذا عبر الوقت منتصف الليل).' };
+      if (req > 1440) return { ok: false, err: 'الحد الأقصى لوقت العمل هو 24:00.' };
+      return { ok: true, min: req };
+    }
+    function refresh() {
+      var q = required();
+      var actual = typeof h.actualMin === 'number' ? h.actualMin : null;
+      errEl.textContent = q.ok ? '' : q.err;
+      preview.textContent = q.ok ? 'الوقت المطلوب الجديد: ' + ltr_(fmtMin_(q.min)) + ' · الساعات الفعلية: ' + ltr_(actual === null ? (h.actual || '—') : fmtMin_(actual)) + ' · الفرق: ' + ltr_(actual === null ? '—' : fmtDiff_(actual - q.min)) : '';
+      if (box.getAttribute('data-busy') !== '1') save.disabled = !q.ok;
+      return q;
+    }
+    function autoDate() {
+      if (userPickedDate) return;
+      var s = toMin_(inStart.value), e = toMin_(inEnd.value);
+      if (s !== null && e !== null && o1.value !== o2.value) selDate.value = e <= s ? o2.value : o1.value;
+    }
+    if (!dec.endDate) autoDate();
+    ['input', 'change'].forEach(function (evn) {
+      inStart.addEventListener(evn, function () { autoDate(); refresh(); });
+      inEnd.addEventListener(evn, function () { autoDate(); refresh(); });
+    });
+    selDate.addEventListener('change', function () { userPickedDate = true; refresh(); });
+
+    var doc = opener.ownerDocument;
+    function onKey(ev) {
+      if (ev.key === 'Escape' || ev.key === 'Esc') { ev.preventDefault(); close(); return; }
+      if (ev.key === 'Tab') {
+        var f = Array.prototype.filter.call(box.querySelectorAll('input,select,textarea,button'), function (n) { return !n.disabled; });
+        if (!f.length) return;
+        var first = f[0], last = f[f.length - 1];
+        if (ev.shiftKey && doc.activeElement === first) { ev.preventDefault(); last.focus(); }
+        else if (!ev.shiftKey && doc.activeElement === last) { ev.preventDefault(); first.focus(); }
+      }
+    }
+    function close() {
+      doc.removeEventListener('keydown', onKey, true);
+      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+      var back = opener;
+      if (!doc.body.contains(back)) back = ctx.wrap.querySelector('.btn-adjust') || ctx.wrap.querySelector('button');
+      if (back && back.focus) back.focus();
+    }
+    cancel.addEventListener('click', close);
+    save.addEventListener('click', function () {
+      var q = refresh(); if (!q.ok) return;
+      var extra = hoursExtra_(r, { hoursDecision: 'ADJUST_SHIFT', adjStart: inStart.value, adjEnd: inEnd.value, adjEndDate: (selDate.value === o2.value && o1.value !== o2.value) ? nd : wd });
+      if (reason.value.trim()) extra.reason = reason.value.trim();
+      sendHours_(ctx, extra, '✓ تم حفظ وقت العمل المعدل', box, msg, {
+        busy: function (on) { cancel.disabled = on; if (!on) refresh(); },
+        done: function () { close(); },
+        networkFailed: function () { /* keep the modal open with the message; the manager can retry */ }
+      });
+    });
+    doc.addEventListener('keydown', onKey, true);
+    doc.body.appendChild(overlay);
+    refresh();
+    inStart.focus();
+  }
+
+  function buildExplanation_(ctx, valid) {
+    var r = ctx.r, h = r.hours;
     var box = el('div', 'hours-expl');
+    box.appendChild(el('div', 'meta hours-expl-title', 'Optional explanation / تبرير اختياري'));
     if (h.explanation) box.appendChild(el('div', 'meta', 'Your explanation: ' + h.explanation.decision + ' - ' + h.explanation.text + (h.explanation.at ? ' (' + h.explanation.at + ')' : '')));
-    else box.appendChild(el('div', 'meta hours-bad', 'Explanation required for these hours.'));
-    var linkValid = !data.expiresAt || new Date(data.expiresAt) > new Date();
-    if (!linkValid) { card.appendChild(box); return; }
+    if (!valid) return box;
     var sel = el('select'); sel.setAttribute('aria-label', 'Hours decision for ' + r.employeeName);
     [['APPROVED', h.category === 'SHORT_HOURS' ? 'Approve short hours' : 'Approve extra hours'], ['REJECTED', h.category === 'SHORT_HOURS' ? 'Reject short hours' : 'Reject extra hours']].forEach(function (o) {
       var opt = el('option', null, o[1]); opt.value = o[0]; sel.appendChild(opt);
     });
     if (h.explanation) sel.value = h.explanation.decision;
-    var txt = el('input'); txt.type = 'text'; txt.maxLength = 500; txt.placeholder = 'Explanation (required), e.g. extended shift coverage';
+    var txt = el('input'); txt.type = 'text'; txt.maxLength = 500; txt.placeholder = 'Explanation (at least 5 characters), e.g. extended shift coverage';
     txt.setAttribute('aria-label', 'Hours explanation for ' + r.employeeName);
     if (h.explanation) txt.value = h.explanation.text;
-    var save = el('button', 'btn-secondary', h.explanation ? 'Update explanation' : 'Save explanation');
+    var save = el('button', 'btn-secondary', h.explanation ? 'Update explanation' : 'Save explanation'); save.type = 'button';
     var note = el('span', 'meta');
     save.addEventListener('click', function () {
       if (txt.value.trim().length < 5) { note.textContent = ' Please write at least 5 characters.'; txt.focus(); return; }
@@ -280,14 +528,18 @@
       if (r.workDate) extra.workDate = r.workDate;
       bridgeWrite('modify', extra).then(function (res) {
         save.disabled = false;
-        if (res.ok) { note.textContent = ' Saved (' + res.decision + '). The hours stay ' + (res.category ? res.category.replace('_', ' ') : 'UNMATCHED') + ' in the report.'; save.textContent = 'Update explanation'; return; }
+        if (res.ok) {
+          var msg = 'Saved (' + (res.decision || sel.value) + ').';
+          if (res.hours) { r.hours = res.hours; fillHours_(ctx, msg); return; }
+          note.textContent = ' ' + msg; save.textContent = 'Update explanation'; return;
+        }
         var kind = Net.classifyBackend(res);
         if (Net.isTerminalTokenKind(kind)) { presentFailure(kind, res); return; }
         note.textContent = ' ' + Net.userMessage(kind, res.error);
       }).catch(function (e) { save.disabled = false; Net.logTech('hours explanation failed', e); note.textContent = ' ' + Net.userMessage(e && e.kind, e && e.message); });
     });
     [sel, txt, save, note].forEach(function (n) { box.appendChild(n); });
-    card.appendChild(box);
+    return box;
   }
 
   /** Writes go through the POST-capable Worker bridge, never JSONP/GET -
