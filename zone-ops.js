@@ -65,14 +65,36 @@
     if (!x) return '—';
     var d = x.diff === null || x.diff === undefined ? '' : (x.diff < 0 ? ' SHORTAGE ' + (-x.diff) : (x.diff > 0 ? ' EXCESS ' + x.diff : ''));
     return 'Expected ' + (x.required === null || x.required === undefined ? '—' : x.required) + ' · approved ' + x.approved + (x.unresolved ? ' (+' + x.unresolved + ' open)' : '') + ' · ' +
-      (x.status === 'PENDING' ? 'PRELIMINARY' : (x.status === 'NO_TARGET' ? 'NO PLAN / بدون خطة' : x.status)) + (x.status === 'UNMATCHED' ? ' —' + d : '');
+      (x.status === 'PENDING' ? 'PRELIMINARY' : (x.status === 'NO_TARGET' ? 'NO PLAN / بدون خطة' : (x.status === 'UNMATCHED' ? (d ? d.trim() : 'DIFFERENT') : x.status)));
   }
   function staffCell(x) { var td = el('td'); td.appendChild(el('span', 'st-' + (x ? x.status : 'NO_TARGET'), staffText(x))); return td; }
-  /** employee working-hours compliance (separate from the headcount check) */
-  function hoursText(emps) {
-    if (!emps.length) return 'no records';
-    var n = {}; emps.forEach(function (e) { n[e.hoursStatus] = (n[e.hoursStatus] || 0) + 1; });
-    return [(n.MATCHED || 0) + ' MATCHED', (n.UNMATCHED || 0) + ' UNMATCHED'].concat(n.NOT_COMPUTABLE ? [n.NOT_COMPUTABLE + ' not computable'] : []).concat(n.NO_REQUIREMENT ? [n.NO_REQUIREMENT + ' pending'] : []).join(' · ');
+  var HOURS_VIEW_LABEL = { MATCHED: 'MATCHED', APPROVED: 'APPROVED', NOT_APPROVED: 'NOT APPROVED', NOT_COMPUTABLE: 'NOT COMPUTABLE', PENDING: 'PENDING', NA: 'N/A' };
+  /** the DISPLAYED hours view of an employee (the backend sends e.hoursView; the fallback only maps the computed status - the display rule lives in the backend) */
+  function hoursViewOf(e) {
+    if (e.hoursView && e.hoursView.status) return e.hoursView;
+    return { status: { MATCHED: 'MATCHED', UNMATCHED: 'DIFFERENT', NOT_COMPUTABLE: 'NOT_COMPUTABLE', NO_REQUIREMENT: 'PENDING', NOT_APPLICABLE: 'NA' }[e.hoursStatus] || e.hoursStatus, source: 'COMPUTED', kind: '', label: '', adjusted: null };
+  }
+  function hoursViewClass(st) { return st === 'MATCHED' || st === 'APPROVED' ? 'st-MATCHED' : (st === 'NOT_APPROVED' ? 'st-UNMATCHED' : (st === 'PENDING' ? 'st-PENDING' : (st === 'NOT_COMPUTABLE' ? 'st-NOT_COMPUTABLE' : null))); }
+  /** the displayed hours partition of a zone-day: counts.hoursView (backend), or counted from the employees' hoursView */
+  function hoursViewCounts(c) {
+    if (c.counts && c.counts.hoursView) return c.counts.hoursView;
+    var k = { matched: 0, approved: 0, autoApproved: 0, managerApproved: 0, shiftAdjusted: 0, notApproved: 0, notComputable: 0, pending: 0, na: 0, differs: 0, short: 0, over: 0 };
+    c.employees.forEach(function (e) {
+      var v = hoursViewOf(e);
+      if (v.status === 'MATCHED') k.matched++; else if (v.status === 'APPROVED') { k.approved++; if (v.kind === 'AUTO_APPROVED') k.autoApproved++; else if (v.kind === 'SHIFT_ADJUSTED') k.shiftAdjusted++; else k.managerApproved++; }
+      else if (v.status === 'NOT_APPROVED') k.notApproved++; else if (v.status === 'NOT_COMPUTABLE') k.notComputable++; else if (v.status === 'PENDING') k.pending++; else k.na++;
+      if (e.hoursStatus === 'UNMATCHED') { k.differs++; if (e.varianceMin < 0) k.short++; else k.over++; }
+    });
+    return k;
+  }
+  /** employee working-hours of a zone-day (separate from the headcount check): displayed partition, never the word UNMATCHED */
+  function hoursText(c) {
+    if (!c.employees.length) return 'no records';
+    var k = hoursViewCounts(c), out = [k.matched + ' MATCHED', k.approved + ' APPROVED' + (k.approved ? ' (' + [k.autoApproved ? k.autoApproved + ' auto' : '', k.managerApproved ? k.managerApproved + ' manager' : '', k.shiftAdjusted ? k.shiftAdjusted + ' adjusted' : ''].filter(Boolean).join(', ') + ')' : '')];
+    if (k.notApproved) out.push(k.notApproved + ' NOT APPROVED');
+    if (k.notComputable) out.push(k.notComputable + ' not computable');
+    if (k.pending) out.push(k.pending + ' pending');
+    return out.join(' · ');
   }
   /** the Zone Manager's review link, from the records' link states (Final Submit = COMPLETED) */
   function reviewText(c) {
@@ -250,7 +272,7 @@
       tr.appendChild(mode === 'MORNING_NIGHT' ? staffCell(c.staffing.night) : el('td', null, '—'));
       tr.appendChild(staffCell(c.staffing.total));
       tr.appendChild(el('td', null, c.staffing.uniqueHeadcount + ' / ' + c.staffing.shiftCoverage));
-      tr.appendChild(el('td', c.counts.hoursUnmatched ? 'st-UNMATCHED' : (c.employees.length ? 'st-MATCHED' : null), hoursText(c.employees) + (c.counts.hoursExplanationMissing ? ' (' + c.counts.hoursExplanationMissing + ' need explanation)' : '')));
+      tr.appendChild(el('td', hoursViewCounts(c).notApproved ? 'st-UNMATCHED' : (c.employees.length ? 'st-MATCHED' : null), hoursText(c) + (c.hoursViewDerived ? ' · shown with the current display rule (FINAL issued before 9 Nov 2026)' : '')));
       tr.appendChild(el('td', null, c.counts.pending + c.counts.notReviewed + c.counts.unresolved));
       tr.appendChild(el('td', null, (final ? 'FINAL v' + z.report.version + (z.report.liveChanged ? ' (live data changed since)' : '') + (z.report.integrityOk === false ? ' ⚠ INTEGRITY' : '') + (z.report.excludedInSnapshot > 0 ? ' · FINAL snapshot issued before ' + z.report.excludedInSnapshot + ' current exclusion(s) — shown as issued' : '') :
         'DRAFT · ' + reviewText(c) + ' · ' + (c.blockers.length ? c.blockers.length + ' FINAL blocker(s) - see Details' : 'no blockers: ready to Finalize (not automatic)')) +
@@ -265,7 +287,7 @@
     });
     t.appendChild(tb); wrap.appendChild(t); host.appendChild(wrap);
     if (res.exclusionsActive > 0) host.appendChild(el('div', 'meta', res.exclusionsActive + ' employee exclusion(s) active — excluded employees are not counted.'));
-    host.appendChild(el('div', 'meta', 'A normal shift extended with overtime is ONE employee and ONE shift; the extra time is an hours exception that needs the Zone Manager\'s explanation. Unique = distinct approved employees; coverage = approved employee-shifts.'));
+    host.appendChild(el('div', 'meta', 'A normal shift extended with overtime is ONE employee and ONE shift; the extra time is a difference from the shift: accepted automatically (APPROVED, auto) unless the Zone Manager decides otherwise - an explanation is optional. Unique = distinct approved employees; coverage = approved employee-shifts.'));
     renderSupplements(res);
   }
   // ---------------- Manpower plan (external Daily Log, read only) ----------------
@@ -481,15 +503,21 @@
     if (!final) box.appendChild(el('div', c.blockers.length ? 'notice' : 'meta', c.blockers.length ? 'Finalize is blocked by: ' + c.blockers.join(' · ') : 'Nothing blocks finalization.'));
     var wrap = el('div', 'table-scroll'), t = el('table', 'data-table');
     var hr = el('tr');
-    ['Employee', 'Code', 'Shift', 'Original in → out', 'Approved in → out', 'Actual / required', 'Diff.', 'Hours', 'Manager explanation of hours', 'Approval', 'Manager decisions (in order)', 'Agreement', 'Exceptions', ''].forEach(function (h) { hr.appendChild(el('th', null, h)); });
+    ['Employee', 'Code', 'Shift', 'Original in → out', 'Approved in → out', 'Actual / required', 'Diff.', 'Hours (display)', 'Manager explanation of hours', 'Approval', 'Manager decisions (in order)', 'Agreement', 'Exceptions', ''].forEach(function (h) { hr.appendChild(el('th', null, h)); });
     t.appendChild(hr);
     c.employees.forEach(function (e) {
       var tr = el('tr');
       [e.name + (e.source !== 'BIOMETRIC' ? ' [' + e.source + ']' : ''), e.code, e.shift, (e.originalIn || '—') + ' → ' + (e.originalOut || '—'), (e.approvedIn || '—') + ' → ' + (e.approvedOut || '—') + (e.timeSource !== 'ORIGINAL' ? ' (' + e.timeSource + ')' : ''),
-        (e.actualHours || '—') + ' / ' + (e.requiredHours || '—'), e.varianceHours || ''].forEach(function (v) { tr.appendChild(el('td', null, v)); });
-      tr.appendChild(el('td', 'st-' + e.hoursStatus, e.hoursStatus + (e.hoursCategory ? ' — ' + e.hoursCategory.replace('_', ' ') : '')));
+        (e.actualHours || '—') + ' / ' + (e.requiredHours || '—') + (hoursViewOf(e).adjusted ? ' †' : ''), e.varianceHours || ''].forEach(function (v) { tr.appendChild(el('td', null, v)); });
+      var hv = hoursViewOf(e), htd = el('td', hoursViewClass(hv.status), HOURS_VIEW_LABEL[hv.status] || String(hv.status || '—').replace(/_/g, ' '));
+      if (hv.label) htd.appendChild(el('div', 'meta', hv.label + (hv.by ? ' · ' + hv.by : '') + (hv.at ? ' · ' + hv.at : '')));
+      if (e.hoursStatus === 'UNMATCHED' && e.hoursCategory) htd.appendChild(el('div', 'meta', e.hoursCategory.replace('_', ' ').toLowerCase() + (e.varianceHours ? ' ' + e.varianceHours : '')));
+      if (hv.adjusted) htd.appendChild(el('div', 'meta', '† work time ' + hv.adjusted.start + '–' + hv.adjusted.end + (hv.adjusted.endDate && hv.adjusted.endDate > c.date ? ' (+1d)' : '') + ' · ' + hv.adjusted.required + ' (plan ' + hv.adjusted.planRequired + ')'));
+      if (hv.note) htd.appendChild(el('div', 'meta', hv.note));
+      tr.appendChild(htd);
       var ex = el('td');
-      if (e.explanationStatus !== 'NOT_REQUIRED') ex.appendChild(el('div', e.explanationStatus === 'PROVIDED' ? 'hours-ok' : 'hours-bad', e.explanationStatus === 'MISSING' ? 'EXPLANATION MISSING' : (e.explanationStatus === 'STALE' ? 'RE-CONFIRM (hours changed)' : 'Explanation provided')));
+      if (e.explanationStatus && e.explanationStatus !== 'NOT_REQUIRED') ex.appendChild(el('div', e.explanationStatus === 'PROVIDED' ? 'hours-ok' : 'meta', e.explanationStatus === 'PROVIDED' ? 'Explanation provided' : 'No explanation (optional)'));
+      (e.hoursDecisions || []).forEach(function (d) { if (d.binding === false) return; var tx = d.action === 'CONFIRM_RECORDED' ? 'Recorded time approved' : (d.action === 'REVERT_AUTO' ? 'Back to automatic approval' : (d.action === 'ADJUST_SHIFT' ? 'Work time adjusted to ' + d.start + '–' + d.end + (d.endDate && d.endDate > c.date ? ' (+1d)' : '') + ' · ' + d.required : d.action)); ex.appendChild(el('div', null, d.by + ' (' + d.role + '): ' + tx + (d.reason ? ' — ' + d.reason : '') + ' · ' + d.at)); });
       (e.explanations || []).forEach(function (x) { ex.appendChild(el('div', null, x.name + ' (' + x.role + '): ' + x.decision + ' — ' + x.explanation + (x.recordedBy && x.recordedBy !== x.name ? ' · recorded by ' + x.recordedBy : '') + ' · ' + x.recordedAt)); });
       if (e.missingPunch) ex.appendChild(el('div', e.missingPunchAck ? 'hours-ok' : 'hours-bad', e.missingPunchAck ? 'Missing punch acknowledged by ' + e.missingPunchAck.by + ': ' + e.missingPunchAck.note : 'Missing punch - acknowledgment needed'));
       tr.appendChild(ex);
@@ -502,7 +530,7 @@
       tr.appendChild(el('td', 'meta', e.exceptions.join(' | ')));
       var act = el('td');
       if (!final) {
-        if (e.hoursStatus === 'UNMATCHED' && e.approvalState !== 'REJECTED') addFormBtn(act, 'Record explanation…', function (h) { explainForm(h, c, e); });
+        if (e.hoursStatus === 'UNMATCHED' && e.approvalState !== 'REJECTED') addFormBtn(act, 'Record explanation (optional)…', function (h) { explainForm(h, c, e); });
         if (e.missingPunch && !e.missingPunchAck) addFormBtn(act, 'Acknowledge…', function (h) { ackForm(h, c, e.code, 'MISSING_PUNCH', 'Acknowledge the missing punch of ' + e.name); });
         if (e.approvalState === 'UNRESOLVED' || (e.source !== 'BIOMETRIC' && ['NONE', 'COMPLETED', 'EXPIRED', 'REVOKED'].indexOf(e.linkState) !== -1 && ['PENDING', 'NOT_SENT', 'NOT_REVIEWED'].indexOf(e.approvalState) !== -1)) addFormBtn(act, 'Resolve…', function (h) { resolveForm(h, c, e); });
       }
@@ -536,10 +564,10 @@
     panel.appendChild(go); panel.appendChild(note);
   }
   function explainForm(host, c, e) {
-    var p = formShell(host, 'Record the Zone Manager\'s explanation for ' + e.name + ' (' + e.hoursCategory.replace('_', ' ') + ' ' + e.varianceHours + '). Managers normally do this in their own review link; here it is recorded as "provided by" them and "recorded by" you. The hours stay UNMATCHED.');
+    var p = formShell(host, 'Record the Zone Manager\'s explanation for ' + e.name + ' (' + e.hoursCategory.replace('_', ' ') + ' ' + e.varianceHours + '). An explanation is optional. Managers normally do this in their own review link; here it is recorded as "provided by" them and "recorded by" you. It is kept with the report; the recorded hours and the real difference are unchanged.');
     var dec = el('select'); [['APPROVED', 'Approved'], ['REJECTED', 'Rejected']].forEach(function (o) { var x = el('option', null, o[1]); x.value = o[0]; dec.appendChild(x); });
     var by = el('input'); by.type = 'text'; by.placeholder = 'Explanation provided by (manager name)'; by.maxLength = 80;
-    var tx = el('input'); tx.type = 'text'; tx.placeholder = 'Explanation (required)'; tx.maxLength = 500;
+    var tx = el('input'); tx.type = 'text'; tx.placeholder = 'Explanation text'; tx.maxLength = 500;
     [dec, by, tx].forEach(function (n) { p.appendChild(n); });
     submitOp(p, 'exceptionRecord', function () {
       if (by.value.trim().length < 2 || tx.value.trim().length < 5) { tx.focus(); return null; }

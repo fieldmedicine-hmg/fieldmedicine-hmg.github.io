@@ -10,11 +10,29 @@
     var s = c.staffing;
     return c.config.mode === 'MORNING_NIGHT' ? [['MORNING', s.morning], ['NIGHT', s.night], ['DAILY TOTAL', s.total]] : [['DAILY TOTAL', s.total]];
   }
+  // ---- hours approval display (2026-11-09): e.hoursView is sent by the backend (display rule lives there); the fallback only maps the computed status ----
+  var VIEW_LABEL = { MATCHED: 'MATCHED', APPROVED: 'APPROVED', NOT_APPROVED: 'NOT APPROVED', NOT_COMPUTABLE: 'NOT COMPUTABLE', PENDING: 'PENDING', NA: 'N/A' };
+  function viewOf(e) {
+    if (e.hoursView && e.hoursView.status) return e.hoursView;
+    return { status: { MATCHED: 'MATCHED', NOT_COMPUTABLE: 'NOT_COMPUTABLE', NO_REQUIREMENT: 'PENDING', NOT_APPLICABLE: 'NA' }[e.hoursStatus] || (e.hoursStatus === 'UNMATCHED' ? 'DIFFERENT' : e.hoursStatus),
+      source: 'COMPUTED', kind: '', label: '', by: '', at: '', reason: '', adjusted: null };
+  }
+  function viewLabel(v) { return VIEW_LABEL[v.status] || (v.status === 'DIFFERENT' ? 'DIFFERENT FROM SHIFT' : String(v.status || '').replace(/_/g, ' ')); }
+  function sourceText(v) { return v.source === 'AUTO' ? 'auto (no manager action)' : (v.source === 'MANAGER' ? 'manager' + (v.by ? ': ' + v.by : '') : 'computed'); }
+  function checkText(e) { return e.hoursStatus === 'UNMATCHED' ? 'DIFFERENT FROM SHIFT' : (e.hoursStatus === 'MATCHED' ? 'MATCHED' : viewLabel(viewOf(e))); }
+  function adjText(v, date) { var a = v.adjusted; return a ? a.start + '–' + a.end + (a.endDate && date && a.endDate > date ? ' (+1d)' : '') + ' ' + a.required : ''; }
+  function hvCounts(c) {
+    if (c.counts && c.counts.hoursView) return c.counts.hoursView;
+    var k = { approved: 0, differs: 0 };
+    c.employees.forEach(function (e) { if (viewOf(e).status === 'APPROVED') k.approved++; if (e.hoursStatus === 'UNMATCHED') k.differs++; });
+    return k;
+  }
+  function expText(st) { return st === 'MISSING' ? 'NONE (optional)' : (st === 'STALE' ? 'OUTDATED (optional)' : (st === 'NOT_REQUIRED' ? '' : st)); }
   function hoursMin(v) { return v === null || v === undefined || v === '' ? '' : v; }
 
   function workbookSheets(resp) {
     var reports = resp.reports || [];
-    var summary = [], detail = [], unmatched = [], decisions = [], info = [], explRows = [];
+    var summary = [], detail = [], unmatched = [], decisions = [], info = [], explRows = [], hdecs = [];
     reports.forEach(function (r) {
       var c = r.content, ver = r.status === 'FINAL' ? 'FINAL v' + r.version : 'DRAFT';
       var pl = c.plan || { status: 'NONE' }, tg = c.target || null;
@@ -22,34 +40,39 @@
         var x = l[1] || {};
         var gOf = l[0] === 'MORNING' ? pl.morning : (l[0] === 'NIGHT' ? pl.night : pl.scheduled);
         summary.push([c.date, c.zone, c.city, c.config.mode, c.config.policy, l[0], x.required === null || x.required === undefined ? '' : x.required, x.approved === undefined ? '' : x.approved,
-          x.unresolved || 0, diffText(x), x.status === 'NO_TARGET' ? (pl.status === 'INCOMPLETE' ? 'INCOMPLETE' : (pl.status === 'NO_ACTIVE_EVENT' ? 'NO ACTIVE EVENT' : 'NO PLAN / بدون خطة')) : (x.status === 'PENDING' ? 'PRELIMINARY' : x.status || ''), c.staffing.uniqueHeadcount, c.staffing.shiftCoverage, c.counts.hoursUnmatched, c.counts.pending + c.counts.notReviewed + c.counts.unresolved,
+          x.unresolved || 0, diffText(x), x.status === 'NO_TARGET' ? (pl.status === 'INCOMPLETE' ? 'INCOMPLETE' : (pl.status === 'NO_ACTIVE_EVENT' ? 'NO ACTIVE EVENT' : 'NO PLAN / بدون خطة')) : (x.status === 'PENDING' ? 'PRELIMINARY' : x.status || ''), c.staffing.uniqueHeadcount, c.staffing.shiftCoverage, hvCounts(c).differs, c.counts.pending + c.counts.notReviewed + c.counts.unresolved,
           c.counts.disagreements, ver, String(r.hash).slice(0, 16),
           // MANPOWER: expected (effective target) vs external plan - the external Present column is never the actual count
           tg ? (tg.source || 'MANUAL') + (tg.manualLines ? (tg.manualOnly ? ' (MANUAL PLAN)' : ' + MANUAL PLAN') : '') + (tg.stale ? ' (STALE)' : '') : (pl.status === 'INCOMPLETE' ? 'INCOMPLETE' : (pl.status === 'NO_ACTIVE_EVENT' ? 'NO ACTIVE EVENT' : 'NO PLAN / بدون خطة')), tg && tg.overrideStatus ? tg.overrideStatus : '', l[0] === 'DAILY TOTAL' ? (pl.approvedPlan === null || pl.approvedPlan === undefined ? '' : pl.approvedPlan) : '',
           gOf === null || gOf === undefined ? '' : gOf, l[0] === 'DAILY TOTAL' && pl.planDiff !== null && pl.planDiff !== undefined ? pl.planDiff : '', l[0] === 'DAILY TOTAL' ? (pl.discrepancy ? 'DISCREPANCY' : (pl.status === 'VALID' ? 'OK' : '')) : '',
-          pl.status, pl.freshnessLabel || '', l[0] === 'DAILY TOTAL' && pl.status === 'INCOMPLETE' ? pl.knownPartial : '']);
+          pl.status, pl.freshnessLabel || '', l[0] === 'DAILY TOTAL' && pl.status === 'INCOMPLETE' ? pl.knownPartial : '', hvCounts(c).approved || 0]);
         if (x.status === 'UNMATCHED' || x.status === 'PENDING' || x.status === 'NO_TARGET') {
           unmatched.push([c.date, c.zone, 'STAFFING', l[0], '', '', x.status, 'Required ' + (x.required === null || x.required === undefined ? '—' : x.required) + ', approved ' + x.approved +
             (x.unresolved ? ', unresolved ' + x.unresolved : '') + (diffText(x) ? ' (' + diffText(x) + ')' : ''), ver]);
         }
       });
       c.employees.forEach(function (e) {
+        var hv = viewOf(e);
         detail.push([c.date, c.zone, e.code, e.name, e.designation, e.source, e.shift, e.originalIn, e.originalOut, e.approvedIn, e.approvedOut, e.timeSource,
-          e.actualHours, e.requiredHours, e.varianceHours, hoursMin(e.varianceMin), e.hoursStatus, e.hoursReason, (e.hoursCategory || '').replace('_', ' '), e.additionalHours || '',
-          e.explanationStatus === 'NOT_REQUIRED' ? '' : e.explanationStatus, (e.explanations || []).map(function (x) { return x.name + ' (' + x.role + '): ' + x.decision + ' - ' + x.explanation; }).join(' | '),
+          e.actualHours, e.requiredHours, e.varianceHours, hoursMin(e.varianceMin), viewLabel(hv), e.hoursReason, (e.hoursCategory || '').replace('_', ' '), e.additionalHours || '',
+          expText(e.explanationStatus), (e.explanations || []).map(function (x) { return x.name + ' (' + x.role + '): ' + x.decision + ' - ' + x.explanation; }).join(' | '),
           e.approvalState, e.officialDecision, e.finalStatus,
           e.officialReviewer, e.decidedAt, e.policy, e.agreement, e.opinions.length, e.counted ? 'YES' : 'NO', e.exceptions.join(' | '),
-          e.recordId, e.supplementId, e.reviewId, e.checkinSubmissionId, e.checkoutSubmissionId, ver]);
+          e.recordId, e.supplementId, e.reviewId, e.checkinSubmissionId, e.checkoutSubmissionId, ver,
+          hv.label || '', hv.by || '', hv.at || '', checkText(e), hv.adjusted ? hv.adjusted.planRequired : '', adjText(hv, c.date)]);
+        (e.hoursDecisions || []).forEach(function (d) {
+          hdecs.push([c.date, c.zone, e.code, e.name, d.action, d.by, d.role, d.at, d.start && d.end ? d.start + '–' + d.end + (d.endDate && d.endDate > c.date ? ' (+1d)' : '') : '', d.required, d.actual, d.reason, d.binding === false ? 'NO (superseded / not binding)' : 'YES', d.source, ver]);
+        });
         if (e.hoursStatus === 'UNMATCHED') {
-          unmatched.push([c.date, c.zone, (e.hoursCategory || 'HOURS').replace('_', ' '), e.shift, e.code, e.name, 'UNMATCHED', e.hoursReason + ' (actual ' + e.actualHours + ', required ' + e.requiredHours + ') · explanation ' +
-            (e.explanationStatus === 'PROVIDED' ? 'PROVIDED: ' + (e.explanations || []).map(function (x) { return x.name + ' ' + x.decision + ' - ' + x.explanation; }).join(' | ') : e.explanationStatus), ver]);
+          unmatched.push([c.date, c.zone, (e.hoursCategory || 'HOURS').replace('_', ' '), e.shift, e.code, e.name, viewLabel(hv), e.hoursReason + ' (actual ' + e.actualHours + ', required ' + e.requiredHours + (hv.adjusted ? ', adjusted work time ' + adjText(hv, c.date) + '; plan ' + hv.adjusted.planRequired : '') + ') · source ' + sourceText(hv) + (hv.label ? ' · ' + hv.label : '') + ' · explanation ' +
+            (e.explanationStatus === 'PROVIDED' ? 'PROVIDED: ' + (e.explanations || []).map(function (x) { return x.name + ' ' + x.decision + ' - ' + x.explanation; }).join(' | ') : 'none (optional)'), ver]);
         }
         if (e.hoursStatus === 'NOT_COMPUTABLE') {
           unmatched.push([c.date, c.zone, 'MISSING PUNCH', e.shift, e.code, e.name, 'NOT_COMPUTABLE', e.hoursReason + (e.missingPunch ? (e.missingPunchAck ? ' · acknowledged by ' + e.missingPunchAck.by + ': ' + e.missingPunchAck.note : ' · acknowledgment REQUIRED') : ''), ver]);
         }
         (e.explanations || []).forEach(function (x) {
           explRows.push([c.date, c.zone, e.code, e.name, (e.hoursCategory || '').replace('_', ' '), e.requiredHours, e.actualHours, e.varianceHours, x.variance, x.name, x.managerId, x.role, x.decision, x.explanation,
-            x.recordedAt, x.recordedBy, x.source, 'UNMATCHED (an approved explanation never makes the hours compliant)', ver]);
+            x.recordedAt, x.recordedBy, x.source, 'DIFFERENT FROM SHIFT - displayed as ' + viewLabel(hv) + ' (' + sourceText(hv) + '); the real difference is kept, an explanation never changes the recorded hours', ver]);
         });
         if (['PENDING', 'NOT_SENT', 'NOT_REVIEWED', 'UNRESOLVED'].indexOf(e.approvalState) !== -1) {
           unmatched.push([c.date, c.zone, 'APPROVAL', e.shift, e.code, e.name, e.approvalState, e.exceptions.join(' | '), ver]);
@@ -81,7 +104,7 @@
     var agg = (resp.aggregate || []).map(function (z) {
       return [resp.fromDate || resp.date, resp.toDate || resp.date, z.zone, z.mode, z.days, z.finalDays, z.statusDays.MATCHED, z.statusDays.UNMATCHED, z.statusDays.PENDING, z.statusDays.NO_TARGET,
         z.requiredEmployeeDays, z.approvedEmployeeDays, z.morning.required, z.morning.approved, z.night.required, z.night.approved, z.shortageDays, z.shortage, z.excessDays, z.excess,
-        z.uniqueEmployees, z.records, z.hoursUnmatched, z.overtimeHours, z.shortHours, z.explanationsMissing, z.pendingRecords, z.disagreements];
+        z.uniqueEmployees, z.records, z.hoursView ? z.hoursView.differs : z.hoursUnmatched, z.overtimeHours, z.shortHours, z.explanationsMissing, z.pendingRecords, z.disagreements, z.hoursView ? z.hoursView.approved : ''];
     });
     return [
       { name: 'Period Summary', columns: [{ header: 'From', type: 'date' }, { header: 'To', type: 'date' }, { header: 'Zone', width: 22 }, { header: 'Mode', width: 15 }, { header: 'Days', type: 'number' },
@@ -89,17 +112,17 @@
         { header: 'Required Employee-Days', type: 'number' }, { header: 'Approved Employee-Days', type: 'number' }, { header: 'Morning Required', type: 'number' }, { header: 'Morning Approved', type: 'number' },
         { header: 'Night Required', type: 'number' }, { header: 'Night Approved', type: 'number' }, { header: 'Shortage Days', type: 'number' }, { header: 'Total Shortage', type: 'number' },
         { header: 'Excess Days', type: 'number' }, { header: 'Total Excess', type: 'number' }, { header: 'Unique Approved Employees', type: 'number' }, { header: 'Employee Records', type: 'number' },
-        { header: 'Hours Unmatched', type: 'number' }, { header: 'Overtime (H:MM)', type: 'string' }, { header: 'Short Hours (H:MM)', type: 'string' }, { header: 'Explanations Missing', type: 'number' },
-        { header: 'Open Records', type: 'number' }, { header: 'Manager Disagreements', type: 'number' }],
+        { header: 'Hours Different From Shift', type: 'number' }, { header: 'Overtime (H:MM)', type: 'string' }, { header: 'Short Hours (H:MM)', type: 'string' }, { header: 'Explanations Missing', type: 'number' },
+        { header: 'Open Records', type: 'number' }, { header: 'Manager Disagreements', type: 'number' }, { header: 'Hours Approved', type: 'number' }],
         rows: agg.concat(agg.length ? [['', '', 'NOTE', resp.aggregationNote || 'Each day is compared with its own target; period figures are sums of daily figures (employee-days).']]
           .concat(resp.finalSnapshotExclusionsNote ? [['', '', 'NOTE', resp.finalSnapshotExclusionsNote]] : [])
           .concat(resp.exclusionsActive > 0 ? [['', '', 'NOTE', 'Employee exclusions active when generated: ' + resp.exclusionsActive + ' - excluded employees are not counted in live (DRAFT) figures; FINAL days show the issued figures.']] : []) : []) },
       { name: 'Daily Staffing', columns: [{ header: 'Date', type: 'date' }, { header: 'Zone', width: 22 }, { header: 'City' }, { header: 'Mode', width: 15 }, { header: 'Approval Policy', width: 22 },
         { header: 'Shift', width: 13 }, { header: 'Required', type: 'number' }, { header: 'Approved', type: 'number' }, { header: 'Unresolved', type: 'number' }, { header: 'Shortage / Excess', type: 'string' },
-        { header: 'Staffing Status', width: 14 }, { header: 'Unique Headcount', type: 'number' }, { header: 'Shift Coverage', type: 'number' }, { header: 'Hours Unmatched', type: 'number' },
+        { header: 'Staffing Status', width: 14 }, { header: 'Unique Headcount', type: 'number' }, { header: 'Shift Coverage', type: 'number' }, { header: 'Hours Different From Shift', type: 'number' },
         { header: 'Pending / Unresolved Records', type: 'number' }, { header: 'Manager Disagreements', type: 'number' }, { header: 'Report', width: 10 }, { header: 'Snapshot', type: 'string', width: 18 },
         { header: 'Effective Expected Source', width: 22 }, { header: 'Override Status', type: 'wrap', width: 30 }, { header: 'External Approved (F)', type: 'number' }, { header: 'External Scheduled (G)', type: 'number' },
-        { header: 'Plan Difference (G-F)', type: 'number' }, { header: 'Plan Check', width: 14 }, { header: 'Plan Status', width: 13 }, { header: 'Plan Source Freshness', type: 'wrap', width: 34 }, { header: 'Known Partial (G) - INCOMPLETE only', type: 'number' }], rows: summary },
+        { header: 'Plan Difference (G-F)', type: 'number' }, { header: 'Plan Check', width: 14 }, { header: 'Plan Status', width: 13 }, { header: 'Plan Source Freshness', type: 'wrap', width: 34 }, { header: 'Known Partial (G) - INCOMPLETE only', type: 'number' }, { header: 'Hours Approved', type: 'number' }], rows: summary },
       { name: 'Employee Detail', columns: [{ header: 'Date', type: 'date' }, { header: 'Zone', width: 20 }, { header: 'Employee Code', type: 'string' }, { header: 'Employee Name', width: 26 }, { header: 'Designation' },
         { header: 'Source', width: 22 }, { header: 'Shift' }, { header: 'Original Check-in', type: 'datetimeMin', width: 17 }, { header: 'Original Check-out', type: 'datetimeMin', width: 17 },
         { header: 'Approved Check-in', type: 'datetimeMin', width: 17 }, { header: 'Approved Check-out', type: 'datetimeMin', width: 17 }, { header: 'Time Source', width: 16 },
@@ -109,13 +132,18 @@
         { header: 'Official Reviewer', width: 20 }, { header: 'Decided At', type: 'datetimeMin', width: 17 }, { header: 'Approval Policy', width: 22 }, { header: 'Manager Agreement' },
         { header: 'Manager Opinions', type: 'number' }, { header: 'Counted In Headcount' }, { header: 'Exceptions', type: 'wrap', width: 50 }, { header: 'Attendance Record ID', type: 'string', width: 24 },
         { header: 'Supplement ID', type: 'string', width: 22 }, { header: 'Manager Review ID', type: 'string', width: 38 }, { header: 'Check-in Submission ID', type: 'string', width: 22 },
-        { header: 'Check-out Submission ID', type: 'string', width: 22 }, { header: 'Report', width: 10 }], rows: detail },
+        { header: 'Check-out Submission ID', type: 'string', width: 22 }, { header: 'Report', width: 10 },
+        { header: 'Hours Approval', width: 28 }, { header: 'Approved / Decided By', width: 22 }, { header: 'Decided At', type: 'datetimeMin', width: 17 }, { header: 'Hours Check (computed)', width: 22 },
+        { header: 'Plan Required', type: 'string' }, { header: 'Adjusted Work Time', width: 24 }], rows: detail },
       { name: 'Hours Explanations', columns: [{ header: 'Date', type: 'date' }, { header: 'Zone', width: 20 }, { header: 'Employee Code', type: 'string' }, { header: 'Employee Name', width: 26 },
         { header: 'Category', width: 14 }, { header: 'Required', type: 'string' }, { header: 'Actual', type: 'string' }, { header: 'Difference', type: 'string' }, { header: 'Difference When Explained', type: 'string' },
         { header: 'Explained By', width: 22 }, { header: 'Manager ID', type: 'string' }, { header: 'Role', width: 14 }, { header: 'Decision' }, { header: 'Explanation', type: 'wrap', width: 45 },
-        { header: 'Recorded At', type: 'datetimeMin', width: 17 }, { header: 'Recorded By', width: 24 }, { header: 'Source', width: 30 }, { header: 'Hours Status', width: 30 }, { header: 'Report', width: 10 }], rows: explRows },
-      { name: 'Unmatched Cases', columns: [{ header: 'Date', type: 'date' }, { header: 'Zone', width: 20 }, { header: 'Type', width: 22 }, { header: 'Shift' }, { header: 'Employee Code', type: 'string' },
-        { header: 'Employee Name', width: 26 }, { header: 'Status', width: 16 }, { header: 'Detail', type: 'wrap', width: 70 }, { header: 'Report', width: 10 }], rows: unmatched },
+        { header: 'Recorded At', type: 'datetimeMin', width: 17 }, { header: 'Recorded By', width: 24 }, { header: 'Source', width: 30 }, { header: 'Hours Check / Display', width: 60 }, { header: 'Report', width: 10 }], rows: explRows },
+      { name: 'Hours Decisions', columns: [{ header: 'Date', type: 'date' }, { header: 'Zone', width: 20 }, { header: 'Employee Code', type: 'string' }, { header: 'Employee Name', width: 26 },
+        { header: 'Action', width: 18 }, { header: 'By', width: 22 }, { header: 'Role', width: 16 }, { header: 'At', type: 'datetimeMin', width: 17 }, { header: 'Work Time', width: 22 },
+        { header: 'Required', type: 'string' }, { header: 'Actual', type: 'string' }, { header: 'Reason', type: 'wrap', width: 40 }, { header: 'Binding', width: 14 }, { header: 'Source', width: 18 }, { header: 'Report', width: 10 }], rows: hdecs },
+      { name: 'Hour Differences & Cases', columns: [{ header: 'Date', type: 'date' }, { header: 'Zone', width: 20 }, { header: 'Type', width: 22 }, { header: 'Shift' }, { header: 'Employee Code', type: 'string' },
+        { header: 'Employee Name', width: 26 }, { header: 'Status (display)', width: 18 }, { header: 'Detail (source, difference)', type: 'wrap', width: 70 }, { header: 'Report', width: 10 }], rows: unmatched },
       { name: 'Manager Decisions', columns: [{ header: 'Date', type: 'date' }, { header: 'Zone', width: 20 }, { header: 'Employee Code', type: 'string' }, { header: 'Employee Name', width: 26 },
         { header: 'Order', type: 'number' }, { header: 'Manager', width: 22 }, { header: 'Manager ID', type: 'string' }, { header: 'Role', width: 20 }, { header: 'Decision' },
         { header: 'Reason / Comment', type: 'wrap', width: 40 }, { header: 'Decided At', type: 'datetimeMin', width: 17 }, { header: 'Agreement' }, { header: 'Official Decision' },
