@@ -379,8 +379,8 @@
       $('iCheck').disabled = false;
       var host = $('iList'); clear(host);
       if (!r.ok) { setMsg('iStatus', 'Could not check: ' + r.error, true); return; }
-      var c = r.counts || {}, bad = (c.LOST || 0) + (c.MISSING_ROW || 0);
-      setMsg('iStatus', (note ? note + ' ' : '') + 'OK ' + (c.OK || 0) + ' · lost ' + (c.LOST || 0) + ' · missing record ' + (c.MISSING_ROW || 0) + ' · orphaned ' + (c.ORPHANED || 0) + ' · duplicate ' + (c.DUPLICATE || 0) + ' · excluded ' + (c.EXCLUDED || 0), bad + (c.ORPHANED || 0) + (c.DUPLICATE || 0) > 0);
+      var c = r.counts || {}, bad = c.LOST || 0;
+      setMsg('iStatus', (note ? note + ' ' : '') + 'OK ' + (c.OK || 0) + ' · lost ' + (c.LOST || 0) + ' · orphaned ' + (c.ORPHANED || 0) + ' · duplicate ' + (c.DUPLICATE || 0) + ' · excluded ' + (c.EXCLUDED || 0), bad + (c.ORPHANED || 0) + (c.DUPLICATE || 0) > 0);
       $('iReapply').hidden = !(canWrite() && bad > 0);
       var items = (r.items || []).filter(function (x) { return x.state !== 'OK'; });
       if (!items.length) return;
@@ -391,7 +391,7 @@
   }
   function reapply() {
     var a = iArgs();
-    if (!window.confirm('Re-apply the LOST corrections of ' + a.from + ' to ' + a.to + ' exactly as approved?\nDuplicates and missing records are not touched.')) return;
+    if (!window.confirm('Re-apply the LOST corrections of ' + a.from + ' to ' + a.to + ' exactly as approved?\nDuplicates and orphaned corrections are not touched; a record is never created.')) return;
     $('iReapply').disabled = true; setMsg('iStatus', 'Re-applying…');
     op('svReapply', Object.assign({ confirm: true }, a), a.from, a.to).then(function (r) {
       $('iReapply').disabled = false;

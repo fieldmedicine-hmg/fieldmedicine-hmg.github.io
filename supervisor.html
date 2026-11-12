@@ -88,7 +88,7 @@
       <div id="hStatus" class="meta" role="status"></div>
       <div id="hList"></div>
       <div class="section-title">Correction integrity / سلامة التصحيحات</div>
-      <div class="meta">Compares every active correction in the date range above with the attendance records (after a rebuild, rollback or sync). Lost corrections can be re-applied exactly as approved; duplicates and missing records are only reported.</div>
+      <div class="meta">Compares every active correction in the date range above with the attendance records (after a rebuild, rollback or sync). Lost corrections can be re-applied exactly as approved to the existing record; duplicates and orphaned corrections are only reported. A day without any real punch never becomes attendance.</div>
       <div class="filter-bar">
         <div class="filter-field"><button id="iCheck" class="btn-secondary">Check integrity / فحص</button></div>
         <div class="filter-field"><button id="iReapply" class="btn-primary" hidden>Re-apply lost corrections / إعادة التطبيق</button></div>
@@ -101,6 +101,6 @@
 <script src="net.js?v=20261112a"></script>
 <script src="access.js?v=20261112a"></script>
 <script src="xlsx.js?v=20261112a"></script>
-<script src="supervisor.js?v=20261112c"></script>
+<script src="supervisor.js?v=20261113a"></script>
 </body>
 </html>
