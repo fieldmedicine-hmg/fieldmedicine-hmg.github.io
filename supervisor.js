@@ -68,6 +68,8 @@
     assignPreview();
   }
   function start() {
+    // access.js has already read ?adminToken= into memory: take the personal credential out of the address bar / history right away
+    try { if (/[?&]adminToken=/.test(location.search)) history.replaceState(null, '', location.pathname); } catch (e) { /* best effort */ }
     A.onChange(paintAccess);
     paintAccess(A.state());
     A.check().then(function (st) {
@@ -181,7 +183,7 @@
     inMode.addEventListener('change', sync); outMode.addEventListener('change', sync); sync();
     var attempt = null; // { sig, id } - one requestId per attempt; reused only when the identical request is retried
     function payload(action) {
-      var p = { caseKey: c.caseKey, expectedVersion: c.version, action: action, reason: reason.value.trim(), confirm: true };
+      var p = { caseKey: c.caseKey, expectedVersion: c.version, expectedStamp: c.rowStamp, action: action, reason: reason.value.trim(), confirm: true };
       if (action === 'CONFIRM') { p.checkIn = { mode: 'KEEP' }; p.checkOut = { mode: 'KEEP', nextDay: false }; return p; }
       p.checkIn = { mode: inMode.value }; if (inMode.value === 'SET') p.checkIn.time = inTime.value;
       p.checkOut = { mode: outMode.value }; if (outMode.value === 'SET') { p.checkOut.time = outTime.value; p.checkOut.nextDay = next.checked; }
@@ -226,6 +228,7 @@
         }
         apply.disabled = false; conf.disabled = (c.missing || []).length > 0 || c.state === 'CORRECTED';
         if (r.code === 'VERSION_CONFLICT') { attempt = null; loadQueue('This case was changed elsewhere - the queue was reloaded.'); return; }
+        if (r.code === 'APPLY_FAILED') attempt = null; // a rolled-back attempt is retried as a NEW request
         res.textContent = 'NOT saved: ' + (r.error || r.code) + (r.code ? ' [' + r.code + ']' : ''); res.className = 'meta report-error';
       });
     }
@@ -366,12 +369,44 @@
     });
   }
 
+  // ---------------- integrity (check: supervisor + admin; re-apply: supervisor) ----------------
+  function iArgs() { return { from: $('hFrom').value, to: $('hTo').value }; }
+  function checkIntegrity(note) {
+    var a = iArgs();
+    if (!a.from || !a.to || a.from > a.to) { setMsg('iStatus', 'Choose a valid date range above.', true); return; }
+    $('iCheck').disabled = true; setMsg('iStatus', 'Checking…');
+    op('svIntegrity', a, a.from, a.to).then(function (r) {
+      $('iCheck').disabled = false;
+      var host = $('iList'); clear(host);
+      if (!r.ok) { setMsg('iStatus', 'Could not check: ' + r.error, true); return; }
+      var c = r.counts || {}, bad = (c.LOST || 0) + (c.MISSING_ROW || 0);
+      setMsg('iStatus', (note ? note + ' ' : '') + 'OK ' + (c.OK || 0) + ' · lost ' + (c.LOST || 0) + ' · missing record ' + (c.MISSING_ROW || 0) + ' · orphaned ' + (c.ORPHANED || 0) + ' · duplicate ' + (c.DUPLICATE || 0) + ' · excluded ' + (c.EXCLUDED || 0), bad + (c.ORPHANED || 0) + (c.DUPLICATE || 0) > 0);
+      $('iReapply').hidden = !(canWrite() && bad > 0);
+      var items = (r.items || []).filter(function (x) { return x.state !== 'OK'; });
+      if (!items.length) return;
+      host.appendChild(table(['State', 'Date', 'Code', 'Name', 'Zone', 'Correction', 'Approved in', 'Approved out', 'Current in', 'Current out', 'Rows'], items.map(function (x) {
+        return tr([x.state, x.workDate, x.employeeCode, x.employeeName, x.zone, x.correctionId + ' v' + x.version + ' (' + x.type + ')', x.approvedIn, x.approvedOut, x.currentIn, x.currentOut, x.rows]);
+      })));
+    });
+  }
+  function reapply() {
+    var a = iArgs();
+    if (!window.confirm('Re-apply the LOST corrections of ' + a.from + ' to ' + a.to + ' exactly as approved?\nDuplicates and missing records are not touched.')) return;
+    $('iReapply').disabled = true; setMsg('iStatus', 'Re-applying…');
+    op('svReapply', Object.assign({ confirm: true }, a), a.from, a.to).then(function (r) {
+      $('iReapply').disabled = false;
+      checkIntegrity((r.ok ? 'Re-applied ' : 'Partly re-applied ') + (r.reapplied || 0) + (r.failed ? ', FAILED ' + r.failed : '') + '.');
+    });
+  }
+
   // ---------------- wiring ----------------
   ['queue', 'schedule', 'history'].forEach(function (t) { $('svTab' + t.charAt(0).toUpperCase() + t.slice(1)).addEventListener('click', function () { showTab(t); }); });
   $('qLoad').addEventListener('click', function () { loadQueue(); });
   $('sLoad').addEventListener('click', function () { loadSchedule(); });
   $('sExport').addEventListener('click', exportExcel);
   $('hLoad').addEventListener('click', loadHistory);
+  $('iCheck').addEventListener('click', function () { checkIntegrity(); });
+  $('iReapply').addEventListener('click', reapply);
   $('aFind').addEventListener('click', findEmployee);
   $('aCode').addEventListener('keydown', function (ev) { if (ev.key === 'Enter') findEmployee(); });
   ['aFrom', 'aTo', 'aStart', 'aEnd'].forEach(function (id) { $(id).addEventListener('input', assignPreview); $(id).addEventListener('change', assignPreview); });
