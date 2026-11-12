@@ -127,6 +127,19 @@
       <div class="meta">PDF and Excel are separate downloads (one request each); the same snapshot code means the same data. "Download PDF" exports the ticked zones as DRAFT (or FINAL). "Approve Report &amp; Export" is your approval for distribution: your name, the time, a reference and the approved snapshot are stored (Report_Approvals); the management PDF itself shows only the date, the zone and the figures. Approval never changes a status (hours, approvals and differences stay exactly as computed) and is separate from Finalize (step 7). Fingerprints whose Area has no zone are never put in a zone's report: tick "UNASSIGNED / NEEDS CLASSIFICATION" to review them in their own file.</div>
     </div>
 
+    <div class="zo-sub" id="zoSvSection">
+      <div class="section-title">مشرف الحضور &mdash; Attendance Supervisor</div>
+      <div class="meta">One person at a time may correct approved attendance times (page: supervisor.html). Designating a new supervisor replaces the current one and issues a new personal access link, shown once. Admin only.</div>
+      <div id="zoSvStatus" class="meta">Loading&hellip;</div>
+      <div class="filter-bar">
+        <div class="filter-field zo-wide"><label for="zoSvEmail">Supervisor email / البريد الإلكتروني</label><input type="text" id="zoSvEmail" autocomplete="off" spellcheck="false" dir="ltr"></div>
+        <div class="filter-field"><button id="zoSvDesignateBtn" class="btn-primary">Designate</button></div>
+        <div class="filter-field"><button id="zoSvRevokeBtn" class="btn-secondary">Revoke</button></div>
+        <div class="filter-field"><button id="zoSvRefreshBtn" class="btn-secondary">Refresh status</button></div>
+      </div>
+      <div id="zoSvLink"></div>
+    </div>
+
     <div class="zo-sub">
       <div class="section-title">Supplementary Attendance (missing fingerprint)</div>
       <div class="meta">Recorded separately from biometric data; it appears in the manager's review link and counts only after the manager approves it. <span id="zoSuppDateLabel"></span></div>
@@ -217,7 +230,7 @@
 <script src="xlsx.js?v=20261106c"></script>
 <script src="zone-ops-export.js?v=20261109a"></script>
 <script src="access.js?v=20261106c"></script>
-<script src="zone-ops.js?v=20261109a"></script>
+<script src="zone-ops.js?v=20261112a"></script>
 <script src="control.js?v=20261107b"></script>
 </body>
 </html>

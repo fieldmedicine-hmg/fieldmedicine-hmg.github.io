@@ -175,3 +175,8 @@ button.btn-link { background: transparent; border: none; color: #1c5fa8; text-de
 .modal-msg { color: #990000; font-size: 13px; font-weight: bold; }
 .modal-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 @media (max-width: 640px) { .hours-actions button, .modal-actions button { flex: 1 1 100%; width: 100%; font-size: 15px; } .hours-alert { padding: 10px; } }
+.sv-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.sv-case { border: 1px solid #d0d0d0; border-radius: 4px; padding: 10px 12px; margin: 8px 0; }
+.sv-case .filter-bar { margin-top: 8px; margin-bottom: 4px; }
+/* supervisor page: the hidden attribute must win over .filter-field / .filter-bar display rules */
+#svMain [hidden], #svMain[hidden] { display: none !important; }
