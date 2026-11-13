@@ -1,6 +1,6 @@
 // Attendance Supervisor page V1.4 (2026-11-13, batch editing): ALL attendance records (svList view ALL, paged by listId + completeness check), an Edit button on every row (FIRST column) opening an inline editor.
 // The editor NEVER sends anything: its primary action keeps a DRAFT and moves to the next record (auto-advance + keyboard). Drafts live in memory + localStorage (per signed-in identity), are shown on the rows and in a
-// review panel, and are sent by ONE "Save & Approve All" (svCorrectBatch, 25 per request, sequential, idempotent requestIds, per-draft results, in-place row patch). Direct supervisor approval when permitted. Shift schedule, history.
+// review panel, and are sent by ONE "Save & Approve All" (svCorrectBatch, compact encoding packed by encoded size <= 3,800 bytes and <= 25 per request, sequential, idempotent requestIds, per-draft results, in-place row patch). Direct supervisor approval when permitted. Shift schedule, history.
 // Credential = a supervisor's personal access link (?adminToken=...) read once by access.js (global or zone-limited), or an Analytics Admin (explicit intervention).
 // Data reaches the DOM only through textContent or esc() (HTML-escaped); no inline scripts (CSP script-src 'self'). Editing has no confirmation popups; every write is sent once per attempt (requestId).
 (function () {
@@ -562,17 +562,64 @@
     openCorrection(i, true);
   }
   function dayGap(a, b) { return Math.round((new Date(b + 'T12:00:00Z') - new Date(a + 'T12:00:00Z')) / 86400000); }
-  /** Chunks of CHUNK drafts, ordered by date, each inside one window of at most 31 days (the backend refuses a wider one). */
-  function planChunks(keys) {
-    var out = [], cur = [], first = '';
-    keys.forEach(function (k) {
-      var dt = drafts[k].workDate;
-      if (cur.length && (cur.length >= CHUNK || dayGap(first, dt) > 30)) { out.push(cur); cur = []; }
-      if (!cur.length) first = dt;
-      cur.push(k);
+  // ---- V1.4.1: compact encoding + packing by the ACTUAL encoded size (the Worker refuses a POST body above 4,096 bytes with HTTP 413) ----
+  var BODY_BUDGET = 3800, TOO_LONG_MSG = 'Reason/note too long for one request - shorten it. / السبب أو الملاحظة طويلة جدًا - اختصرها.', SIZE_BATCH_ID = '';
+  while (SIZE_BATCH_ID.length < 34) SIZE_BATCH_ID += 'x';
+  function utf8len(str) { try { if (window.TextEncoder) return new TextEncoder().encode(str).length; } catch (e) { /* fall through */ } return unescape(encodeURIComponent(str)).length; }
+  function haveSubtle() { try { return !!(window.crypto && window.crypto.subtle && typeof window.crypto.subtle.digest === 'function' && window.TextEncoder); } catch (e) { return false; } }
+  /** First 12 hex chars of SHA-256 (UTF-8) of a string (the backend compares it with svSha_(rowStamp).slice(0, 12)). */
+  function sha12(str) {
+    return window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(str))).then(function (buf) {
+      var u = new Uint8Array(buf), h = ''; for (var i = 0; i < 6; i++) h += ('0' + u[i].toString(16)).slice(-2);
+      return h;
     });
-    if (cur.length) out.push(cur);
-    return out;
+  }
+  /** One punch spec -> compact: '' KEEP | 'S' SCHEDULE | 'HH:mm' SET | 'HH:mm+' SET next day; null when it cannot be expressed. */
+  function specCode(sp) {
+    if (!sp || sp.mode === 'KEEP') return '';
+    if (sp.mode === 'SCHEDULE') return 'S';
+    if (sp.mode === 'SET' && validTime(sp.time)) return sp.time + (sp.nextDay === true ? '+' : '');
+    return null;
+  }
+  /** Verbose items (each with requestId) -> the compact opArgs payload, or null when an item cannot be encoded. hashes: caseKey -> stampHash. */
+  function compactArgs(base, items, hashes) {
+    var r = [], at = {}, c = [], ok = true;
+    var idx = function (t) { if (t === undefined || t === null || t === '') return -1; t = String(t); if (at[t] === undefined) { at[t] = r.length; r.push(t); } return at[t]; };
+    items.forEach(function (it) {
+      var a = it.action === 'CONFIRM' ? 1 : it.action === 'CORRECT' ? 0 : -1, ci = specCode(it.checkIn), co = specCode(it.checkOut), h = hashes[it.caseKey], rs = idx(it.reason);
+      if (a < 0 || ci === null || co === null || !h || rs < 0) { ok = false; return; }
+      c.push([it.caseKey, it.expectedVersion, h, it.requestId, a, ci, co, rs, idx(it.evidence), it.directApproval === true ? 1 : 0]);
+    });
+    if (!ok) return null;
+    var out = Object.assign({}, base); out.r = r; out.c = c; return out;
+  }
+  /** The exact POST body A.call sends for an op (action / token key follow the credential kind), for size measurement. */
+  function bodyBytes(name, args, from, to) {
+    var cred = A.credential(), f = from || A.todayRiyadh(), t = to || f;
+    var b = { action: cred && cred.kind === 'device' ? 'periodAnalyticsViaDevice' : 'periodAnalytics', op: name, date: f, fromDate: f, toDate: t, opArgs: JSON.stringify(args || {}) };
+    b[cred && cred.kind === 'device' ? 'deviceToken' : 'adminToken'] = cred ? cred.value : '';
+    return utf8len(JSON.stringify(b));
+  }
+  /** entries [{k, it, date}] (date-ordered) -> {plan: [{ks, args, from, to}], tooLong: [k]}. Each request holds as many drafts as fit BODY_BUDGET bytes (and CHUNK, and a 31-day window). */
+  function packRequests(entries, hashes) {
+    var plan = [], tooLong = [], cur = [], first = '';
+    var build = function (es, batchId) {
+      var base = { batchId: batchId, confirm: true }; if (isAdmin()) base.adminOverride = true; // automatic: the backend still requires it and enforces every gate
+      var items = es.map(function (e) { return e.it; }), ds = es.map(function (e) { return e.date; }).sort();
+      var args = hashes ? compactArgs(base, items, hashes) : null;
+      if (!args) { args = Object.assign({}, base); args.items = items; }
+      return { args: args, from: ds[0], to: ds[ds.length - 1] };
+    };
+    var size = function (es) { var b = build(es, SIZE_BATCH_ID); return bodyBytes('svCorrectBatch', b.args, b.from, b.to); };
+    var flush = function () { if (!cur.length) return; var b = build(cur, newId()); plan.push({ ks: cur.map(function (e) { return e.k; }), args: b.args, from: b.from, to: b.to }); cur = []; };
+    entries.forEach(function (e) {
+      if (size([e]) > BODY_BUDGET) { tooLong.push(e.k); return; }
+      if (cur.length && (cur.length >= CHUNK || dayGap(first, e.date) > 30 || size(cur.concat([e])) > BODY_BUDGET)) flush();
+      if (!cur.length) first = e.date;
+      cur.push(e);
+    });
+    flush();
+    return { plan: plan, tooLong: tooLong };
   }
   function isNetworkFailure(r) { return !r || (r.ok === false && !r.code && !r.retryable && /^(Network error|Empty response|timed out)/i.test(String(r.error || ''))); }
   function failText(code, err) { return (CODE_TEXT[code] ? CODE_TEXT[code] + ' ' : '') + (err || code || 'failed') + (code ? ' [' + code + ']' : ''); }
@@ -583,7 +630,7 @@
     var all = draftKeys(), keys = all.filter(function (k) { return drafts[k].status !== 'CONFLICT'; });
     if (!keys.length) { setMsg('qSummary', all.length ? 'Only drafts with a conflict remain - open each one (Edit) to review it. / راجع التعارضات أولًا.' : 'No pending changes. / لا توجد تغييرات.', all.length > 0); return; }
     keys.sort(function (a, b) { var x = drafts[a], y = drafts[b]; return x.workDate < y.workDate ? -1 : x.workDate > y.workDate ? 1 : (x.employeeCode < y.employeeCode ? -1 : x.employeeCode > y.employeeCode ? 1 : 0); });
-    var plan = planChunks(keys), total = keys.length, done = 0, tot = { saved: 0, failed: 0, conflict: 0, review: 0, unconfirmed: 0 }, stopped = false;
+    var plan = [], total = keys.length, done = 0, tot = { saved: 0, failed: 0, conflict: 0, review: 0, unconfirmed: 0 }, stopped = false;
     submitting = true; setBusy(true); setMsg('qSummary', ''); setMsg('qResult', '');
     closeForm(); updateToolbar();
     var bar = $('qBatchBar'); bar.max = total; bar.value = 0; $('qBatch').hidden = false;
@@ -598,20 +645,9 @@
     }
     function runChunk(ci) {
       if (ci >= plan.length) { finish(); return; }
-      var ks = plan[ci], items = [], dates = [];
-      ks.forEach(function (k) {
-        var d = drafts[k], it = Object.assign({}, d.item), sig;
-        if (d.editPath === 'DIRECT_APPROVAL') it.directApproval = true; else delete it.directApproval;
-        sig = JSON.stringify(it);
-        if (!d.requestId || d.reqSig !== sig || d.newId) { d.requestId = newId(); d.reqSig = sig; d.newId = false; } // one requestId per attempt: reused while the draft is unchanged
-        it.requestId = d.requestId; items.push(it); dates.push(d.workDate);
-      });
-      persist();
-      dates.sort();
-      var args = { batchId: newId(), items: items, confirm: true };
-      if (isAdmin()) args.adminOverride = true; // automatic: the backend still requires it and enforces every gate
+      var ks = plan[ci].ks, args = plan[ci].args;
       progress(done + ks.length);
-      opWrite('svCorrectBatch', args, dates[0], dates[dates.length - 1], function (n) { progress(done + ks.length, 'Busy - retrying… (' + n + ' of 3) / النظام مشغول'); }).then(null, function () { return null; }).then(function (r) {
+      opWrite('svCorrectBatch', args, plan[ci].from, plan[ci].to, function (n) { progress(done + ks.length, 'Busy - retrying… (' + n + ' of 3) / النظام مشغول'); }).then(null, function () { return null; }).then(function (r) {
         if (isNetworkFailure(r)) { ks.forEach(function (k) { mark(drafts[k], 'NOT_CONFIRMED', NOT_CONFIRMED_MSG); }); tot.unconfirmed += ks.length; stopped = true; done += ks.length; progress(done); redrawKeys(ks); finish(); return; }
         if (!r.ok) { ks.forEach(function (k) { mark(drafts[k], 'FAILED', 'NOT saved: ' + failText(r.code, r.error)); }); tot.failed += ks.length; stopped = true; done += ks.length; progress(done); redrawKeys(ks); finish(); return; }
         var byKey = {}; (r.results || []).forEach(function (x) { if (x && x.caseKey) byKey[x.caseKey] = x; });
@@ -633,7 +669,24 @@
         runChunk(ci + 1);
       });
     }
-    runChunk(0);
+    /** Builds every request first (requestIds, stamp hashes, byte packing); the compact encoding needs SubtleCrypto, else the verbose format is sent with the same byte packing. */
+    var entries = keys.map(function (k) {
+      var d = drafts[k], it = Object.assign({}, d.item), sig;
+      if (d.editPath === 'DIRECT_APPROVAL') it.directApproval = true; else delete it.directApproval;
+      sig = JSON.stringify(it);
+      if (!d.requestId || d.reqSig !== sig || d.newId) { d.requestId = newId(); d.reqSig = sig; d.newId = false; } // one requestId per attempt: reused while the draft is unchanged
+      it.requestId = d.requestId;
+      return { k: k, it: it, date: d.workDate };
+    });
+    persist();
+    var hp = haveSubtle() ? Promise.all(entries.map(function (e) { return sha12(drafts[e.k].expectedStamp); })).then(function (hs) { var m = {}; entries.forEach(function (e, i) { m[e.k] = hs[i]; }); return m; }, function () { return null; }) : Promise.resolve(null);
+    hp.then(function (hashes) {
+      var pk = packRequests(entries, hashes);
+      plan = pk.plan;
+      pk.tooLong.forEach(function (k) { mark(drafts[k], 'FAILED', TOO_LONG_MSG); tot.failed++; done++; });
+      if (pk.tooLong.length) { persist(); redrawKeys(pk.tooLong); }
+      runChunk(0);
+    });
   }
   function skipNext() {
     var from = openIdx >= 0 ? openIdx : selIdx, j = nextEditable(from);
