@@ -1006,62 +1006,166 @@
     });
   }
 
-  // ---------------- Attendance Supervisor / مشرف الحضور (admin only) ----------------
-  var svSeq = 0;
+  // ---------------- Attendance Supervisors / مشرفو الحضور (admin only) ----------------
+  // Several supervisors at once, each with all zones or chosen zones. Every write is confirmed first and the table is re-read afterwards.
+  var svSeq = 0, svZones = [], svList = [];
+  var SV_STATE_TAG = { ACTIVE: 'APPROVED', INACTIVE: 'PENDING', REVOKED: 'REJECTED', USER_INACTIVE: 'REJECTED' };
   function svDay() { return $('zoDate').value || (A.todayRiyadh ? A.todayRiyadh() : new Date().toISOString().slice(0, 10)); }
   function svCall(op, args) { var d = svDay(); return opCall(op, { date: d, fromDate: d, toDate: d, opArgs: JSON.stringify(args || {}) }); }
+  var SV_RETRY_MS = (function () { try { var m = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname) && /[?&]retryMs=(\d+)/.exec(location.search); if (m) return +m[1]; } catch (e) { /* default */ } return 2000; })();
+  /** Writes answered with retryable:true (backend lock busy) are repeated up to 3 more times (2 s, 4 s, 6 s) with the SAME body. */
+  function svCallRetry(op, args) {
+    var n = 0;
+    function go() {
+      return svCall(op, args).then(function (r) {
+        if (r && r.retryable === true && n < 3) { n++; svNote('Busy - retrying… (' + n + ' of 3) / النظام مشغول - إعادة المحاولة…', false); return new Promise(function (res) { setTimeout(res, SV_RETRY_MS * n); }).then(go); }
+        return r;
+      });
+    }
+    return go();
+  }
+  function svScopeText(s) { return s === 'ALL' || !s ? 'All zones' : (Array.isArray(s) ? s.join(', ') : String(s)); }
+  function svChecked(host) { return Array.prototype.map.call(host.querySelectorAll('input[type=checkbox]:checked'), function (b) { return b.value; }); }
+  /** Zone checkboxes into `host`, keeping the ticks already made (or `selected` when given). */
+  function svZoneBoxes(host, selected) {
+    var keep = selected || svChecked(host); clear(host);
+    svZones.forEach(function (z) {
+      var lb = el('label', 'zo-zone'), cb = el('input'); cb.type = 'checkbox'; cb.value = z; cb.checked = keep.indexOf(z) !== -1;
+      cb.addEventListener('change', svGates);
+      lb.appendChild(cb); lb.appendChild(document.createTextNode(' ' + z)); lb.setAttribute('dir', 'auto'); host.appendChild(lb);
+    });
+  }
+  function svScopeSel() { return $('zoSvScopeAll').checked ? 'ALL' : svChecked($('zoSvZones')); }
   function svGates() {
     var authorized = A.state().code === 'AUTHORIZED', base = authorized ? (busy ? 'Working…' : '') : 'Access required - see step 1 above.';
-    var email = ($('zoSvEmail').value || '').trim();
+    var email = ($('zoSvEmail').value || '').trim(), sc = svScopeSel();
+    $('zoSvZones').hidden = $('zoSvScopeAll').checked;
     gate($('zoSvRefreshBtn'), base);
-    gate($('zoSvDesignateBtn'), base || (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? '' : 'Type the supervisor email first.'));
-    gate($('zoSvRevokeBtn'), base);
+    gate($('zoSvDesignateBtn'), base || (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? (sc === 'ALL' || sc.length ? '' : 'Tick at least one zone, or choose All zones.') : 'Type the supervisor email first.'));
+    gate($('zoSvRevokeAllBtn'), base || (svList.some(function (r) { return r.hasLink; }) ? '' : 'No supervisor has a link.'));
   }
   function svStatus() {
     var seq = ++svSeq, box = $('zoSvStatus'); box.textContent = 'Reading supervisor status…'; box.className = 'meta';
-    svCall('supervisorStatus').then(function (r) {
+    return svCall('supervisorStatus').then(function (r) {
       if (seq !== svSeq) return;
       if (!r.ok) { box.textContent = 'Could not read the supervisor status: ' + r.error; box.className = 'meta report-error'; return; }
-      box.textContent = r.supervisor ? 'Current supervisor: ' + r.supervisor.maskedEmail + ' (designated ' + (r.supervisor.designatedAt || '—') + ')' : 'No attendance supervisor is designated.';
+      svZones = r.zones || []; svList = r.supervisors || [];
+      var act = svList.filter(function (x) { return x.state === 'ACTIVE'; }).length;
+      box.textContent = svList.length ? svList.length + ' supervisor(s), ' + act + ' active (maximum ' + (r.max || '—') + ').' : 'No attendance supervisor is designated.';
+      svZoneBoxes($('zoSvZones')); svRender(); svGates();
     });
   }
-  function svDesignate() {
-    var email = $('zoSvEmail').value.trim();
-    if (!window.confirm('Designate ' + email + ' as the attendance supervisor?\nThis REPLACES any existing supervisor and issues a new personal access link (shown once).\nتعيين مشرف حضور جديد يستبدل المشرف الحالي.')) return;
-    busy = true; refreshGates(); svGates();
-    svCall('supervisorDesignate', { email: email, confirm: true }).then(function (r) {
-      busy = false; refreshGates(); svGates();
-      var host = $('zoSvLink'); clear(host);
-      if (!r.ok) { host.appendChild(el('div', 'report-error', 'NOT designated: ' + r.error)); return; }
-      var panel = el('div', 'confirm-box');
-      panel.appendChild(el('div', 'group-title', 'Supervisor designated: ' + (r.maskedEmail || email)));
-      panel.appendChild(el('div', 'report-error', 'WARNING: this link is a personal credential. It is shown ONCE - copy it now and send it only to the supervisor. / هذا الرابط شخصي ويظهر مرة واحدة فقط.'));
-      var inp = el('input', 'link-input'); inp.type = 'text'; inp.readOnly = true; inp.value = r.accessLink || ''; inp.setAttribute('dir', 'ltr'); inp.id = 'zoSvLinkInput';
-      var cp = el('button', 'btn-primary', 'Copy'), note = el('span', 'meta');
-      cp.addEventListener('click', function () {
-        inp.select();
-        var ok = false; try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
-        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(inp.value).then(function () { note.textContent = ' Copied.'; }, function () { note.textContent = ok ? ' Copied.' : ' Select the text and copy it manually.'; });
-        else note.textContent = ok ? ' Copied.' : ' Select the text and copy it manually.';
-      });
-      panel.appendChild(inp); panel.appendChild(cp); panel.appendChild(note); host.appendChild(panel);
-      $('zoSvEmail').value = ''; svGates(); svStatus();
+  function svRender() {
+    var host = $('zoSvTable'); clear(host);
+    if (!svList.length) return;
+    var t = el('table', 'data-table zo-sv-table'), hr = el('tr'), tb = el('tbody');
+    ['Email / البريد', 'Name', 'Scope / النطاق', 'State / الحالة', 'Designated', 'Last access', 'Actions / إجراءات'].forEach(function (h) { hr.appendChild(el('th', null, h)); });
+    var th = el('thead'); th.appendChild(hr); t.appendChild(th);
+    svList.forEach(function (r) {
+      var tr = el('tr'); tr.setAttribute('data-ref', r.ref); tr.setAttribute('data-state', r.state);
+      var td = function (v, cls) { var c = el('td', cls, v === undefined || v === null || v === '' ? '—' : v); c.setAttribute('dir', 'auto'); tr.appendChild(c); return c; };
+      td(r.email || r.maskedEmail, 'sv-email'); td(r.name); td(svScopeText(r.scope), 'sv-scope-cell');
+      var st = el('td'); st.appendChild(el('span', 'tag tag-' + (SV_STATE_TAG[r.state] || 'UNKNOWN'), r.state)); tr.appendChild(st);
+      td(r.designatedAt); td(r.lastAccessed);
+      var ac = el('td', 'zo-actions');
+      function btn(act, label, disabled, why) { var b = el('button', 'btn-secondary zo-mini', label); b.type = 'button'; b.setAttribute('data-act', act); b.setAttribute('data-ref', r.ref); if (disabled) { b.disabled = true; b.title = why || ''; } ac.appendChild(b); }
+      btn('edit', 'Edit zones / تعديل المناطق');
+      if (r.state === 'ACTIVE') btn('toggle', 'Deactivate / إيقاف'); else btn('toggle', 'Activate / تفعيل', r.state === 'REVOKED' || r.state === 'USER_INACTIVE', r.state === 'REVOKED' ? 'The link was revoked - issue a new link.' : 'The user is inactive.');
+      btn('revoke', 'Revoke link / سحب الرابط', !r.hasLink, 'No link to revoke.');
+      btn('link', 'Issue new link / رابط جديد', r.state === 'USER_INACTIVE', 'The user is inactive.');
+      tr.appendChild(ac); tb.appendChild(tr);
     });
+    t.appendChild(tb); var w = el('div', 'table-scroll'); w.appendChild(t); host.appendChild(w);
   }
-  function svRevoke() {
-    if (!window.confirm('Revoke the current attendance supervisor? Their personal link stops working at once.\nسحب صلاحية مشرف الحضور الحالي؟')) return;
+  function svNote(text, isError) { var host = $('zoSvLink'); clear(host); host.appendChild(el('div', isError ? 'report-error' : 'zo-saved', text)); }
+  function svShowLink(r, email, title) {
+    var host = $('zoSvLink'); clear(host);
+    var panel = el('div', 'confirm-box');
+    panel.appendChild(el('div', 'group-title', title + ': ' + (r.maskedEmail || email) + ' · ' + svScopeText(r.scope)));
+    panel.appendChild(el('div', 'report-error', 'WARNING: this link is a personal credential. It is shown ONCE - copy it now and send it only to the supervisor. / هذا الرابط شخصي ويظهر مرة واحدة فقط.'));
+    var inp = el('input', 'link-input'); inp.type = 'text'; inp.readOnly = true; inp.value = r.accessLink || ''; inp.setAttribute('dir', 'ltr'); inp.id = 'zoSvLinkInput';
+    var cp = el('button', 'btn-primary', 'Copy'), note = el('span', 'meta'); cp.type = 'button'; cp.id = 'zoSvCopyBtn';
+    cp.addEventListener('click', function () {
+      inp.select();
+      var ok = false; try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(inp.value).then(function () { note.textContent = ' Copied.'; }, function () { note.textContent = ok ? ' Copied.' : ' Select the text and copy it manually.'; });
+      else note.textContent = ok ? ' Copied.' : ' Select the text and copy it manually.';
+    });
+    panel.appendChild(inp); panel.appendChild(cp); panel.appendChild(note); host.appendChild(panel);
+  }
+  /** One confirmed write; the table is re-read afterwards. onOk(r) shows the result (default: a short note). */
+  function svWrite(opName, args, okText, onOk) {
+    if (busy) return;
     busy = true; refreshGates(); svGates();
-    svCall('supervisorRevoke', { confirm: true }).then(function (r) {
+    svCallRetry(opName, args).then(function (r) {
       busy = false; refreshGates(); svGates();
-      var host = $('zoSvLink'); clear(host);
-      host.appendChild(el('div', r.ok ? 'zo-saved' : 'report-error', r.ok ? 'Supervisor revoked.' : 'NOT revoked: ' + r.error));
+      if (!r.ok) svNote('NOT done: ' + (r.error || r.code) + (r.code ? ' [' + r.code + ']' : ''), true);
+      else if (onOk) onOk(r); else svNote(okText, false);
       svStatus();
     });
   }
+  function svDesignate() {
+    var email = $('zoSvEmail').value.trim(), sc = svScopeSel();
+    if (!(sc === 'ALL' || sc.length)) return;
+    if (!window.confirm('Add ' + email + ' as an attendance supervisor?\nScope: ' + svScopeText(sc) + '.\nOther supervisors are NOT affected. A personal access link is issued (shown once).\nإضافة مشرف حضور - لا يتأثر المشرفون الآخرون.')) return;
+    svWrite('supervisorDesignate', { email: email, zones: sc, confirm: true }, '', function (r) { $('zoSvEmail').value = ''; svShowLink(r, email, 'Supervisor added'); svGates(); });
+  }
+  function svEdit(r) {
+    var host = $('zoSvEdit'); clear(host);
+    var box = el('div', 'confirm-box'); box.setAttribute('data-ref', r.ref);
+    box.appendChild(el('div', 'group-title', 'Edit zones: ' + (r.email || r.maskedEmail)));
+    var all = el('input'), one = el('input'), name = 'zoSvEditScope', la = el('label', null, ' All zones'), lo = el('label', null, ' Only these zones:'), zones = el('div', 'zo-sv-zones');
+    all.type = 'radio'; one.type = 'radio'; all.name = name; one.name = name; all.id = 'zoSvEditAll'; one.id = 'zoSvEditSome';
+    var isAll = r.scope === 'ALL'; all.checked = isAll; one.checked = !isAll;
+    la.insertBefore(all, la.firstChild); lo.insertBefore(one, lo.firstChild);
+    svZoneBoxes(zones, isAll ? [] : r.scope); zones.id = 'zoSvEditZones'; zones.hidden = isAll;
+    function sync() { zones.hidden = all.checked; }
+    all.addEventListener('change', sync); one.addEventListener('change', sync);
+    var save = el('button', 'btn-primary', 'Save zones / حفظ'), cancel = el('button', 'btn-secondary', 'Cancel / إلغاء'), note = el('span', 'meta report-error');
+    save.type = 'button'; cancel.type = 'button'; save.id = 'zoSvEditSave'; cancel.id = 'zoSvEditCancel';
+    cancel.addEventListener('click', function () { clear(host); });
+    save.addEventListener('click', function () {
+      var sc = all.checked ? 'ALL' : svChecked(zones);
+      if (sc !== 'ALL' && !sc.length) { note.textContent = ' Tick at least one zone, or choose All zones.'; return; }
+      if (!window.confirm('Change the scope of ' + (r.email || r.maskedEmail) + ' to: ' + svScopeText(sc) + '?\nتعديل نطاق المشرف.')) return;
+      clear(host);
+      svWrite('supervisorUpdate', { ref: r.ref, zones: sc, confirm: true }, 'Zones updated: ' + (r.email || r.maskedEmail) + ' → ' + svScopeText(sc) + '.');
+    });
+    [la, lo].forEach(function (x) { box.appendChild(x); box.appendChild(document.createTextNode(' ')); });
+    box.appendChild(zones); box.appendChild(save); box.appendChild(document.createTextNode(' ')); box.appendChild(cancel); box.appendChild(note);
+    host.appendChild(box);
+  }
+  function svAct(act, ref) {
+    var r = svList.filter(function (x) { return x.ref === ref; })[0]; if (!r || busy) return;
+    var who = r.email || r.maskedEmail;
+    if (act === 'edit') { svEdit(r); return; }
+    if (act === 'toggle') {
+      var on = r.state !== 'ACTIVE';
+      if (!window.confirm((on ? 'Activate ' : 'Deactivate ') + who + ' as attendance supervisor?\n' + (on ? 'Their existing link works again.' : 'Their link stops working until they are activated again.') + '\n' + (on ? 'تفعيل المشرف' : 'إيقاف المشرف مؤقتًا'))) return;
+      svWrite('supervisorSetActive', { ref: ref, active: on, confirm: true }, (on ? 'Activated: ' : 'Deactivated: ') + who + '.');
+      return;
+    }
+    if (act === 'revoke') {
+      if (!window.confirm('Revoke the personal link of ' + who + '?\nThe link stops working at once; a new link is needed to work again.\nسحب رابط المشرف؟')) return;
+      svWrite('supervisorRevoke', { ref: ref, confirm: true }, 'Link revoked: ' + who + '.');
+      return;
+    }
+    if (act === 'link') {
+      if (!r.email) { svNote('NOT done: the e-mail of this supervisor is not available.', true); return; }
+      if (!window.confirm('Issue a NEW personal link for ' + who + ' (scope: ' + svScopeText(r.scope) + ')?\nThe previous link stops working at once; the supervisor is active again. The new link is shown once.\nإصدار رابط جديد؟')) return;
+      svWrite('supervisorDesignate', { email: r.email, zones: r.scope === 'ALL' ? 'ALL' : r.scope, confirm: true }, '', function (x) { svShowLink(x, r.email, 'New link issued'); });
+    }
+  }
+  function svRevokeAll() {
+    if (!window.confirm('Revoke ALL attendance supervisors? Every personal link stops working at once.\nسحب صلاحية جميع مشرفي الحضور؟')) return;
+    svWrite('supervisorRevoke', { all: true, confirm: true }, 'All supervisor links revoked.');
+  }
   $('zoSvRefreshBtn').addEventListener('click', svStatus);
   $('zoSvDesignateBtn').addEventListener('click', svDesignate);
-  $('zoSvRevokeBtn').addEventListener('click', svRevoke);
+  $('zoSvRevokeAllBtn').addEventListener('click', svRevokeAll);
+  $('zoSvTable').addEventListener('click', function (ev) { var b = ev.target; if (b && b.getAttribute && b.getAttribute('data-act')) svAct(b.getAttribute('data-act'), b.getAttribute('data-ref')); });
   $('zoSvEmail').addEventListener('input', svGates);
+  $('zoSvScopeAll').addEventListener('change', svGates); $('zoSvScopeSome').addEventListener('change', svGates);
   A.onChange(function (st) { svGates(); if (st.code === 'AUTHORIZED') svStatus(); });
   svGates();
 

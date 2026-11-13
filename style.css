@@ -180,3 +180,19 @@ button.btn-link { background: transparent; border: none; color: #1c5fa8; text-de
 .sv-case .filter-bar { margin-top: 8px; margin-bottom: 4px; }
 /* supervisor page: the hidden attribute must win over .filter-field / .filter-bar display rules */
 #svMain [hidden], #svMain[hidden] { display: none !important; }
+
+/* Attendance Supervisor V1.1 (2026-11-13): unified unmatched-records list + supervisors panel */
+.tag-FINAL { background: #d6dbe6; color: #1c2b4a; }
+.tag-CORRECTED, .tag-CONFIRMED { background: #dce6f7; color: #1c3d6b; }
+.tag-FORWARDED { background: #fce8b2; color: #7f5f01; }
+.sv-scope { font-weight: 600; margin: 4px 0; }
+.sv-counts { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 8px 0; padding: 8px 10px; border: 1px solid #e3e4e6; border-radius: 6px; background: #fafafa; font-size: 13px; }
+.sv-count b { font-size: 15px; }
+table.sv-table td { vertical-align: top; }
+table.sv-table tr.sv-ro td { color: #6b6e76; background: #fafafa; }
+.sv-ro-reason { font-style: italic; font-size: 11px; color: #990000; }
+table.sv-table tr.sv-form-row td { white-space: normal; background: #fffdf5; }
+.sv-admin-box { display: flex; align-items: center; gap: 6px; font-weight: 600; color: #990000; }
+.zo-sv-table td, .zo-sv-table th { white-space: nowrap; }
+.zo-sv-zones { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 6px 0; }
+.sv-narrow { width: 6em; }
