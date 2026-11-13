@@ -203,6 +203,7 @@
       card.appendChild(metaLine);
       if (r.changedSinceDecision === true) card.appendChild(el('div', 'plan-warn', 'Attendance changed after this decision (decided on: ' + String(r.decidedOnStatus || '') + '). Contact the office to re-confirm.'));
       if (r.hours) renderHours(card, r, data);
+      renderForward_(card, r, data);
 
       if (r.decision === 'PENDING' && !data.completed) {
         var actions = el('div', 'row-actions');
@@ -313,6 +314,44 @@
     var adj = h.view && h.view.adjusted;
     if (adj) t += ' · بعد التعديل: المطلوب ' + ltr_(adj.required) + ' · الفرق ' + ltr_(String(h.variance || '—').replace('-', '−'));
     return t;
+  }
+
+  // Forward to the attendance supervisor (2026-11-12): same request shape as the hours actions; the reason is required.
+  function needsSupervisor_(r) {
+    var miss = function (v) { return !v || /^\s*(-|—|–|MISSING|N\/A)?\s*$/i.test(String(v)); };
+    var h = r.hours || {};
+    return miss(r.checkin) || miss(r.checkout) || h.status === 'UNMATCHED';
+  }
+  function renderForward_(card, r, data) {
+    if (!needsSupervisor_(r) || !linkValid_(data)) return;
+    var box = el('div', 'hours-sec'); box.setAttribute('dir', 'rtl'); box.setAttribute('lang', 'ar');
+    var open = el('button', 'btn-secondary', 'تحويل إلى مشرف الحضور / Forward to attendance supervisor'); open.type = 'button';
+    var form = el('div', 'hours-actions'); form.hidden = true;
+    var reason = el('input'); reason.type = 'text'; reason.maxLength = 500; reason.setAttribute('dir', 'auto');
+    reason.placeholder = 'السبب (مطلوب) / Reason (required)'; reason.setAttribute('aria-label', 'Forward reason for ' + r.employeeName);
+    var send = el('button', 'btn-adjust', 'إرسال / Send'); send.type = 'button';
+    var msg = el('span', 'hours-alert-msg'); msg.setAttribute('aria-live', 'polite');
+    form.appendChild(reason); form.appendChild(send); form.appendChild(msg);
+    open.addEventListener('click', function () { form.hidden = !form.hidden; if (!form.hidden) reason.focus(); });
+    send.addEventListener('click', function () {
+      var why = reason.value.trim();
+      if (!why) { msg.textContent = 'اكتب السبب أولًا / A reason is required.'; reason.focus(); return; }
+      if (form.getAttribute('data-busy') === '1') return;
+      form.setAttribute('data-busy', '1'); send.disabled = true; open.disabled = true; msg.textContent = 'جارٍ الإرسال…';
+      var extra = hoursExtra_(r, { hoursDecision: 'FORWARD_SUPERVISOR', reason: why }); // one requestId per click; retries inside bridgeWrite reuse it
+      function done() { form.removeAttribute('data-busy'); send.disabled = false; open.disabled = false; }
+      bridgeWrite('modify', extra).then(function (res) {
+        if (res && res.ok) {
+          done(); reason.value = '';
+          msg.textContent = res.duplicate ? '✓ سبق تحويل هذه الحالة إلى مشرف الحضور' : '✓ تم التحويل إلى مشرف الحضور';
+          return;
+        }
+        var kind = Net.classifyBackend(res || {});
+        if (Net.isTerminalTokenKind(kind)) { presentFailure(kind, res); return; }
+        done(); msg.textContent = hoursFailMsg_(res || {});
+      }).catch(function (e) { Net.logTech('forward failed', e); done(); msg.textContent = Net.userMessage(e && e.kind, e && e.message); });
+    });
+    box.appendChild(open); box.appendChild(form); card.appendChild(box);
   }
 
   function renderHours(card, r, data) {

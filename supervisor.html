@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src https://hmg-write-bridge-poc.fieldmedicine1.workers.dev; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';">
+<title>HMG Attendance Supervisor</title>
+<link rel="stylesheet" href="style.css?v=20261112a">
+</head>
+<body>
+<div class="wrap analytics-wrap">
+  <div class="brand">HMG ATTENDANCE SUPERVISOR &mdash; مشرف الحضور</div>
+
+  <div class="access-panel">
+    <div><span id="svAccessState" class="access-state access-CHECKING">CHECKING&hellip;</span> <span id="svAccessWho" class="meta"></span></div>
+    <div id="svAccessDetail" class="meta" role="status"></div>
+    <div id="svRoleBanner" class="notice" hidden></div>
+  </div>
+
+  <div id="svMain" hidden>
+    <div class="sv-tabs" role="tablist">
+      <button type="button" class="btn-primary" id="svTabQueue" role="tab" data-tab="queue">Corrections queue / طلبات التصحيح</button>
+      <button type="button" class="btn-secondary" id="svTabSchedule" role="tab" data-tab="schedule">Shift schedule / جدول الورديات</button>
+      <button type="button" class="btn-secondary" id="svTabHistory" role="tab" data-tab="history">History / السجل</button>
+    </div>
+
+    <div id="svPaneQueue" class="analytics-section">
+      <div class="filter-bar">
+        <div class="filter-field"><label for="qFrom">From / من</label><input type="date" id="qFrom"></div>
+        <div class="filter-field"><label for="qTo">To / إلى</label><input type="date" id="qTo"></div>
+        <div class="filter-field"><label for="qZone">Zone / المنطقة</label><select id="qZone"><option value="">All</option></select></div>
+        <div class="filter-field"><label for="qEvent">Event / Area</label><select id="qEvent"><option value="">All</option></select></div>
+        <div class="filter-field"><label for="qCode">Employee code / الرمز</label><input type="text" id="qCode" autocomplete="off" dir="ltr"></div>
+        <div class="filter-field"><button id="qLoad" class="btn-primary">Load / تحميل</button></div>
+      </div>
+      <div id="qStatus" class="meta" role="status"></div>
+      <div id="qBlocked" class="notice" hidden></div>
+      <div id="qList"></div>
+    </div>
+
+    <div id="svPaneSchedule" class="analytics-section" hidden>
+      <div class="filter-bar">
+        <div class="filter-field"><label for="sFrom">From / من</label><input type="date" id="sFrom"></div>
+        <div class="filter-field"><label for="sTo">To / إلى</label><input type="date" id="sTo"></div>
+        <div class="filter-field"><label for="sZone">Zone</label><select id="sZone"><option value="">All</option></select></div>
+        <div class="filter-field"><label for="sEvent">Event / Area</label><select id="sEvent"><option value="">All</option></select></div>
+        <div class="filter-field"><label for="sLocation">Location</label><select id="sLocation"><option value="">All</option></select></div>
+        <div class="filter-field"><label for="sCode">Employee code</label><input type="text" id="sCode" autocomplete="off" dir="ltr"></div>
+        <div class="filter-field"><button id="sLoad" class="btn-primary">Load / تحميل</button></div>
+        <div class="filter-field"><button id="sExport" class="btn-secondary">Export Excel / تصدير</button></div>
+      </div>
+      <div id="sStatus" class="meta" role="status"></div>
+      <div id="sFiles"></div>
+      <div id="sList"></div>
+
+      <div id="sAssign" class="control-card">
+        <div class="group-title">Assign shifts / تعيين ورديات</div>
+        <div class="filter-bar">
+          <div class="filter-field"><label for="aCode">Find employee by code / ابحث بالرمز</label><input type="text" id="aCode" autocomplete="off" dir="ltr"></div>
+          <div class="filter-field"><button id="aFind" class="btn-secondary">Add to selection</button></div>
+        </div>
+        <div id="aSelected" class="meta"></div>
+        <div class="filter-bar">
+          <div class="filter-field"><label for="aFrom">Date from / من تاريخ</label><input type="date" id="aFrom"></div>
+          <div class="filter-field"><label for="aTo">Date to (blank = single day)</label><input type="date" id="aTo"></div>
+          <div class="filter-field"><label for="aStart">Start / البداية</label><input type="time" id="aStart"></div>
+          <div class="filter-field"><label for="aEnd">End / النهاية</label><input type="time" id="aEnd"></div>
+          <div class="filter-field"><label for="aTol">Tolerance min (1-10)</label><input type="number" id="aTol" min="1" max="10" step="1" style="width:6em"></div>
+          <div class="filter-field"><label for="aNote">Note / ملاحظة</label><input type="text" id="aNote" maxlength="200" dir="auto"></div>
+        </div>
+        <div id="aPreview" class="meta"></div>
+        <div class="row-actions">
+          <button id="aAssign" class="btn-primary">Assign / تعيين</button>
+          <button id="aWithdraw" class="btn-secondary">Withdraw / سحب</button>
+        </div>
+        <div id="aResult" class="meta" role="status"></div>
+      </div>
+    </div>
+
+    <div id="svPaneHistory" class="analytics-section" hidden>
+      <div class="filter-bar">
+        <div class="filter-field"><label for="hFrom">From / من</label><input type="date" id="hFrom"></div>
+        <div class="filter-field"><label for="hTo">To / إلى</label><input type="date" id="hTo"></div>
+        <div class="filter-field"><label for="hCode">Employee code</label><input type="text" id="hCode" autocomplete="off" dir="ltr"></div>
+        <div class="filter-field"><button id="hLoad" class="btn-primary">Load / تحميل</button></div>
+      </div>
+      <div id="hStatus" class="meta" role="status"></div>
+      <div id="hList"></div>
+      <div class="section-title">Correction integrity / سلامة التصحيحات</div>
+      <div class="meta">Compares every active correction in the date range above with the attendance records (after a rebuild, rollback or sync). Lost corrections can be re-applied exactly as approved to the existing record; duplicates and orphaned corrections are only reported. A day without any real punch never becomes attendance.</div>
+      <div class="filter-bar">
+        <div class="filter-field"><button id="iCheck" class="btn-secondary">Check integrity / فحص</button></div>
+        <div class="filter-field"><button id="iReapply" class="btn-primary" hidden>Re-apply lost corrections / إعادة التطبيق</button></div>
+      </div>
+      <div id="iStatus" class="meta" role="status"></div>
+      <div id="iList"></div>
+    </div>
+  </div>
+</div>
+<script src="net.js?v=20261112a"></script>
+<script src="access.js?v=20261112a"></script>
+<script src="xlsx.js?v=20261112a"></script>
+<script src="supervisor.js?v=20261113a"></script>
+</body>
+</html>

@@ -1006,6 +1006,65 @@
     });
   }
 
+  // ---------------- Attendance Supervisor / مشرف الحضور (admin only) ----------------
+  var svSeq = 0;
+  function svDay() { return $('zoDate').value || (A.todayRiyadh ? A.todayRiyadh() : new Date().toISOString().slice(0, 10)); }
+  function svCall(op, args) { var d = svDay(); return opCall(op, { date: d, fromDate: d, toDate: d, opArgs: JSON.stringify(args || {}) }); }
+  function svGates() {
+    var authorized = A.state().code === 'AUTHORIZED', base = authorized ? (busy ? 'Working…' : '') : 'Access required - see step 1 above.';
+    var email = ($('zoSvEmail').value || '').trim();
+    gate($('zoSvRefreshBtn'), base);
+    gate($('zoSvDesignateBtn'), base || (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? '' : 'Type the supervisor email first.'));
+    gate($('zoSvRevokeBtn'), base);
+  }
+  function svStatus() {
+    var seq = ++svSeq, box = $('zoSvStatus'); box.textContent = 'Reading supervisor status…'; box.className = 'meta';
+    svCall('supervisorStatus').then(function (r) {
+      if (seq !== svSeq) return;
+      if (!r.ok) { box.textContent = 'Could not read the supervisor status: ' + r.error; box.className = 'meta report-error'; return; }
+      box.textContent = r.supervisor ? 'Current supervisor: ' + r.supervisor.maskedEmail + ' (designated ' + (r.supervisor.designatedAt || '—') + ')' : 'No attendance supervisor is designated.';
+    });
+  }
+  function svDesignate() {
+    var email = $('zoSvEmail').value.trim();
+    if (!window.confirm('Designate ' + email + ' as the attendance supervisor?\nThis REPLACES any existing supervisor and issues a new personal access link (shown once).\nتعيين مشرف حضور جديد يستبدل المشرف الحالي.')) return;
+    busy = true; refreshGates(); svGates();
+    svCall('supervisorDesignate', { email: email, confirm: true }).then(function (r) {
+      busy = false; refreshGates(); svGates();
+      var host = $('zoSvLink'); clear(host);
+      if (!r.ok) { host.appendChild(el('div', 'report-error', 'NOT designated: ' + r.error)); return; }
+      var panel = el('div', 'confirm-box');
+      panel.appendChild(el('div', 'group-title', 'Supervisor designated: ' + (r.maskedEmail || email)));
+      panel.appendChild(el('div', 'report-error', 'WARNING: this link is a personal credential. It is shown ONCE - copy it now and send it only to the supervisor. / هذا الرابط شخصي ويظهر مرة واحدة فقط.'));
+      var inp = el('input', 'link-input'); inp.type = 'text'; inp.readOnly = true; inp.value = r.accessLink || ''; inp.setAttribute('dir', 'ltr'); inp.id = 'zoSvLinkInput';
+      var cp = el('button', 'btn-primary', 'Copy'), note = el('span', 'meta');
+      cp.addEventListener('click', function () {
+        inp.select();
+        var ok = false; try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(inp.value).then(function () { note.textContent = ' Copied.'; }, function () { note.textContent = ok ? ' Copied.' : ' Select the text and copy it manually.'; });
+        else note.textContent = ok ? ' Copied.' : ' Select the text and copy it manually.';
+      });
+      panel.appendChild(inp); panel.appendChild(cp); panel.appendChild(note); host.appendChild(panel);
+      $('zoSvEmail').value = ''; svGates(); svStatus();
+    });
+  }
+  function svRevoke() {
+    if (!window.confirm('Revoke the current attendance supervisor? Their personal link stops working at once.\nسحب صلاحية مشرف الحضور الحالي؟')) return;
+    busy = true; refreshGates(); svGates();
+    svCall('supervisorRevoke', { confirm: true }).then(function (r) {
+      busy = false; refreshGates(); svGates();
+      var host = $('zoSvLink'); clear(host);
+      host.appendChild(el('div', r.ok ? 'zo-saved' : 'report-error', r.ok ? 'Supervisor revoked.' : 'NOT revoked: ' + r.error));
+      svStatus();
+    });
+  }
+  $('zoSvRefreshBtn').addEventListener('click', svStatus);
+  $('zoSvDesignateBtn').addEventListener('click', svDesignate);
+  $('zoSvRevokeBtn').addEventListener('click', svRevoke);
+  $('zoSvEmail').addEventListener('input', svGates);
+  A.onChange(function (st) { svGates(); if (st.code === 'AUTHORIZED') svStatus(); });
+  svGates();
+
   // ---------------- init ----------------
   ['zoDate', 'zoRepFrom', 'zoRepTo'].forEach(function (id) { $(id).setAttribute('autocomplete', 'off'); });
   $('zoDate').value = A.todayRiyadh();
