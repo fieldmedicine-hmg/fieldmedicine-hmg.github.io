@@ -1,7 +1,7 @@
-// Attendance Supervisor page V1.2 (2026-11-13): ALL attendance records (svList view ALL, paged by listId + completeness check), an Edit button on every row opening an inline editor
-// with ONE "Save & Approve" action (direct supervisor approval when permitted), shift schedule, history.
+// Attendance Supervisor page V1.3 (2026-11-13, high-volume editing): ALL attendance records (svList view ALL, paged by listId + completeness check), an Edit button on every row opening an inline editor
+// with ONE "Save & Approve" action (direct supervisor approval when permitted; the Edit button is the FIRST column), quick-select reasons, in-place row update (no full reload), auto-advance + keyboard, shift schedule, history.
 // Credential = a supervisor's personal access link (?adminToken=...) read once by access.js (global or zone-limited), or an Analytics Admin (explicit intervention).
-// Data reaches the DOM only through textContent or esc() (HTML-escaped); no inline scripts (CSP script-src 'self'). Every write is confirmed first and sent once per attempt (requestId).
+// Data reaches the DOM only through textContent or esc() (HTML-escaped); no inline scripts (CSP script-src 'self'). Editing has no confirmation popups; every write is sent once per attempt (requestId).
 (function () {
   'use strict';
   var A = window.HMGAccess;
@@ -69,10 +69,10 @@
   }
   function applyRole() {
     var b = $('svRoleBanner');
-    if (isAdmin()) { b.hidden = false; b.textContent = 'Administrator intervention / تدخل المسؤول: you see the full list; a correction needs the explicit "I am intervening as administrator" tick-box and is recorded as ADMIN.'; } else b.hidden = true;
+    if (isAdmin()) { b.hidden = false; b.textContent = 'Administrator intervention / تدخل المسؤول: you see the full list; corrections are recorded as administrator ADMIN in the audit.'; } else b.hidden = true;
     var sc = who.scope || {};
     $('svScope').textContent = sc.zones ? 'Zones: ' + sc.zones.join(', ') : 'All zones';
-    $('svDirectInfo').textContent = who.canDirectApprove ? (isAdmin() ? 'Direct approval: allowed with the administrator intervention tick-box. / اعتماد مباشر مسموح' : 'Direct approval: ALLOWED - you can correct and approve Pending / Rejected records without the Zone Manager. / اعتماد مباشر مسموح') : 'Direct approval: not allowed - Pending / Rejected records stay read-only until the Zone Manager decides. / الاعتماد المباشر غير مسموح';
+    $('svDirectInfo').textContent = who.canDirectApprove ? (isAdmin() ? 'Direct approval: allowed (recorded as ADMIN). / اعتماد مباشر مسموح' : 'Direct approval: ALLOWED - you can correct and approve Pending / Rejected records without the Zone Manager. / اعتماد مباشر مسموح') : 'Direct approval: not allowed - Pending / Rejected records stay read-only until the Zone Manager decides. / الاعتماد المباشر غير مسموح';
     $('sAssign').hidden = !canWrite(); $('sReadonlyNote').hidden = canWrite();
     $('aTol').value = who.toleranceDefaultMin || 5;
     var today = A.todayRiyadh(), y = shiftDays(today, -1);
@@ -102,10 +102,17 @@
   }
 
   // ---------------- attendance records (svList view ALL: every record in range, paged by listId + completeness check) ----------------
-  var rows = [], counts = null, loaded = null /* {key, args} of the last COMPLETE load */, loadSeq = 0, openIdx = -1;
-  var COLS = ['Employee Code / الرمز', 'Employee Name / الاسم', 'Date / التاريخ', 'Event / Area', 'Zone / المنطقة', 'Check-in / الدخول', 'Check-out / الخروج', 'Scheduled Shift / الوردية', 'Hours (actual / required) / الساعات', 'Match status / المطابقة', 'Missing Punch / الناقص', 'Zone Manager decision / قرار مدير المنطقة', 'Correction status / حالة التصحيح', 'Actions / إجراءات'];
+  var rows = [], counts = null, loaded = null /* {key, args} of the last COMPLETE load */, loadSeq = 0, openIdx = -1, selIdx = -1, idxByKey = {}, activeEditor = null;
+  function store(k, v) { try { if (v === undefined) return window.localStorage.getItem(k); window.localStorage.setItem(k, v); } catch (e) { /* storage unavailable: session only */ } return null; }
+  var autoAdv = store('hmgSvAutoAdvance') !== '0', lastReason = store('hmgSvLastReason') || '';
+  function rememberReason(id) { lastReason = id || ''; store('hmgSvLastReason', lastReason); }
+  /** Quick-select reasons (the text sent as reason / evidence = the label + " - " + the note). "other" REQUIRES a note. */
+  var REASONS = [{ id: 'noOut', label: 'Forgot to punch out / نسي تسجيل الخروج' }, { id: 'noIn', label: 'Forgot to punch in / نسي تسجيل الدخول' }, { id: 'device', label: 'Device or network failure / عطل الجهاز أو الشبكة' },
+    { id: 'sheet', label: 'Shift sheet confirmed / تم التحقق من كشف الوردية' }, { id: 'gate', label: 'Gate / access log / سجل البوابة' }, { id: 'overtime', label: 'Approved overtime or extended event / عمل إضافي معتمد' },
+    { id: 'early', label: 'Approved early leave / انصراف مبكر معتمد' }, { id: 'other', label: 'Other - write a note / أخرى - اكتب ملاحظة' }];
+  var COLS = ['Actions / إجراءات', 'Employee Code / الرمز', 'Employee Name / الاسم', 'Date / التاريخ', 'Event / Area', 'Zone / المنطقة', 'Check-in / الدخول', 'Check-out / الخروج', 'Scheduled Shift / الوردية', 'Hours (actual / required) / الساعات', 'Match status / المطابقة', 'Missing Punch / الناقص', 'Zone Manager decision / قرار مدير المنطقة', 'Correction status / حالة التصحيح'];
   var RO_TEXT = { FINAL: 'FINAL - the zone day is closed. / اليوم نهائي', NO_DIRECT_PERMISSION: 'Needs Zone Manager approval - you have no direct-approval permission. / لا تملك صلاحية الاعتماد المباشر', NO_PUNCH: 'No real punch - cannot be edited. / لا توجد بصمة',
-    AWAITING_ZONE_MANAGER: 'Waiting for the Zone Manager', ZM_REJECTED: 'Rejected by the Zone Manager' };
+    AWAITING_ZONE_MANAGER: 'Waiting for the Zone Manager', ZM_REJECTED: 'Rejected by the Zone Manager', NOT_AVAILABLE: 'No longer available to you - press Load. / لم يعد متاحًا', REFRESH_FAILED: 'This record could not be refreshed - press Load. / تعذر تحديث السجل' };
   var CODE_TEXT = {
     VERSION_CONFLICT: 'This record was changed by someone else. / تم تعديل السجل من شخص آخر.', ZONE_NOT_ALLOWED: 'This record belongs to a zone outside your access.',
     AWAITING_ZONE_MANAGER: 'The Zone Manager has not approved this record yet.', ZM_REJECTED: 'The Zone Manager rejected this record.', FINAL: 'The zone day is FINAL - it cannot be changed. / اليوم نهائي.',
@@ -113,10 +120,11 @@
     REASON_REQUIRED: 'A reason is required (at least 5 characters for a direct approval). / السبب مطلوب.', EVIDENCE_REQUIRED: 'Evidence is required when a time is set manually.',
     NO_PUNCH_EVIDENCE: 'A record without any real punch cannot be corrected. / لا توجد بصمة فعلية.', NO_CHANGE: 'Nothing was changed. / لا يوجد تغيير.', NOT_ELIGIBLE: 'This record cannot be edited.',
     REQUEST_ID_CONFLICT: 'This request id was used by another user - try again (a new id is created).', NOT_AUTHORIZED: 'Your access is no longer valid.',
-    ADMIN_OVERRIDE_REQUIRED: 'Tick "I am intervening as administrator" first.', APPLY_FAILED: 'The change could not be applied and was rolled back - try again.'
+    ADMIN_OVERRIDE_REQUIRED: 'The administrator intervention flag was not accepted - reload the page.', APPLY_FAILED: 'The change could not be applied and was rolled back - try again.'
   };
   var RELOAD_CODES = ['VERSION_CONFLICT', 'AWAITING_ZONE_MANAGER', 'ZM_REJECTED', 'FINAL', 'ZONE_NOT_ALLOWED', 'NOT_ELIGIBLE', 'DIRECT_APPROVAL_NOT_ALLOWED'];
-  var DIRECT_NOTICE = 'Direct supervisor approval — the Zone Manager decision (PENDING/REJECTED) stays recorded unchanged. / اعتماد مباشر من المشرف — يبقى قرار مدير المنطقة (قيد الانتظار/مرفوض) كما هو دون تغيير.';
+  var DIRECT_NOTICE = 'Direct supervisor approval - ZM decision kept / اعتماد مباشر - يبقى قرار مدير المنطقة';
+  var ADMIN_NOTICE = 'Corrections are recorded as administrator ADMIN in the audit. / تُسجَّل التصحيحات باسم المسؤول ADMIN في السجل.';
   function esc(s) { return String(s === undefined || s === null ? '' : s).replace(/[&<>"']/g, function (ch) { return ch === '&' ? '&amp;' : ch === '<' ? '&lt;' : ch === '>' ? '&gt;' : ch === '"' ? '&quot;' : '&#39;'; }); }
   function isAdmin() { return !!(who && who.role === 'ADMIN'); }
   /** Rows per request: 1000 in production (the backend maximum is 2000); a test override (?pageSize=) is honoured on localhost only. */
@@ -178,7 +186,7 @@
   }
   function setBusy(b) { $('qLoad').disabled = b; $('qExport').disabled = b; }
   function adopt(r, a) {
-    rows = r.rows; counts = r.first.counts || {}; loaded = { key: JSON.stringify(a), args: a }; openIdx = -1;
+    rows = r.rows; counts = r.first.counts || {}; loaded = { key: JSON.stringify(a), args: a }; openIdx = -1; selIdx = -1; activeEditor = null; idxByKey = {}; rows.forEach(function (c, i) { idxByKey[c.caseKey] = i; });
     setOptions($('qZone'), r.first.zones); setOptions($('qEvent'), r.first.events);
     $('qZone').value = a.zone || ''; $('qEvent').value = a.event || '';
     renderCounts(); renderTable();
@@ -197,7 +205,7 @@
     }).then(function (r) {
       if (seq !== loadSeq) return;
       setBusy(false);
-      if (!r.ok) { rows = []; counts = null; loaded = null; openIdx = -1; clear($('qList')); $('qCounts').hidden = true; setMsg('qStatus', 'Could not load: ' + r.error, true); return; }
+      if (!r.ok) { rows = []; counts = null; loaded = null; openIdx = -1; selIdx = -1; idxByKey = {}; activeEditor = null; clear($('qList')); $('qCounts').hidden = true; setMsg('qStatus', 'Could not load: ' + r.error, true); return; }
       adopt(r, a);
       setMsg('qStatus', (note ? note + ' ' : '') + 'All ' + rows.length + ' of ' + r.first.total + ' records loaded.' + (a.status !== 'ALL' ? ' (status filter: ' + a.status + ')' : ''));
       if (opts.focus) focusRow(opts.focus);
@@ -230,17 +238,19 @@
   function canEditRow(c) { return c.canEdit !== undefined ? !!c.canEdit : !!c.canCorrect; }
   function pathText(p) { return p === 'SUPERVISOR_DIRECT' ? 'direct supervisor approval' : (p === 'ZM_GATE' ? 'via Zone Manager gate' : ''); }
   function rowHtml(c, i) {
-    var cor = c.correction, can = canEditRow(c), match = c.matchStatus || '';
+    var cor = c.correction, can = canEditRow(c) && !c._pending, match = c.matchStatus || '';
     var corTxt = '<span class="tag tag-' + esc(c.listState) + '" data-state="' + esc(c.listState) + '">' + esc(c.listState) + '</span> ' + esc(c.correctionStatus === 'NONE' ? 'No correction' : c.correctionStatus + (cor ? ' v' + cor.version : ''));
     if (cor && cor.approvalPath) corTxt += ' <span class="sv-appr-path" data-path="' + esc(cor.approvalPath) + '">· ' + esc(pathText(cor.approvalPath) || cor.approvalPath) + '</span>';
-    var act = '<button type="button" class="btn-primary sv-open sv-edit" data-i="' + i + '"' + (can ? '' : ' disabled title="' + esc(RO_TEXT[c.readOnlyReason] || c.readOnlyReason || 'not editable') + '"') + '>Edit / تعديل</button>';
-    if (!can) act += '<div class="sv-ro-reason" data-reason="' + esc(c.readOnlyReason) + '">' + esc(RO_TEXT[c.readOnlyReason] || c.readOnlyReason || 'not editable') + '</div>';
+    if (c._nomatch) corTxt += ' <span class="sv-nomatch-tag">updated - no longer matches the filter / لم يعد ضمن الفلتر</span>';
+    var act = '<button type="button" class="btn-primary sv-open sv-edit" data-i="' + i + '"' + (can ? '' : ' disabled title="' + esc(c._pending ? 'Refreshing this record…' : (RO_TEXT[c.readOnlyReason] || c.readOnlyReason || 'not editable')) + '"') + '>Edit / تعديل</button>';
+    if (c._pending) act += '<div class="sv-path-note">Refreshing… / جارٍ التحديث</div>';
+    else if (!can) act += '<div class="sv-ro-reason" data-reason="' + esc(c.readOnlyReason) + '">' + esc(RO_TEXT[c.readOnlyReason] || c.readOnlyReason || 'not editable') + '</div>';
     else if (c.editPath === 'DIRECT_APPROVAL') act += '<div class="sv-path-note" data-path="DIRECT_APPROVAL">Direct approval / اعتماد مباشر</div>';
-    var cells = [esc(c.employeeCode), '<span dir="auto">' + esc(c.employeeName) + '</span>', esc(c.workDate), '<span dir="auto">' + esc(c.event) + '</span>', '<span dir="auto">' + esc(c.zone) + '</span>',
+    var cells = [act, esc(c.employeeCode), '<span dir="auto">' + esc(c.employeeName) + '</span>', esc(c.workDate), '<span dir="auto">' + esc(c.event) + '</span>', '<span dir="auto">' + esc(c.zone) + '</span>',
       esc(tm(c.checkIn, c.workDate) || 'MISSING'), esc(tm(c.checkOut, c.workDate) || 'MISSING'), esc(shiftText(c) || 'No schedule'), esc(hoursText(c) || '—'),
       match ? '<span class="tag tag-' + esc(match) + '">' + esc(match) + '</span>' : '—', esc(missText(c) || '—'),
-      '<span class="tag tag-' + esc(c.zmStatus) + '">' + esc(c.zmStatus) + '</span>' + (c.zmBy ? ' <span dir="auto">' + esc(c.zmBy) + '</span>' : ''), corTxt, act];
-    return '<tr class="sv-row' + (can ? '' : ' sv-ro') + '" data-i="' + i + '" data-case="' + esc(c.caseKey) + '" data-state="' + esc(c.listState) + '" data-match="' + esc(match) + '" data-path="' + esc(c.editPath || '') + '"><td>' + cells.join('</td><td>') + '</td></tr>';
+      '<span class="tag tag-' + esc(c.zmStatus) + '">' + esc(c.zmStatus) + '</span>' + (c.zmBy ? ' <span dir="auto">' + esc(c.zmBy) + '</span>' : ''), corTxt];
+    return '<tr tabindex="-1" class="sv-row' + (can ? '' : ' sv-ro') + (c._updated ? ' sv-highlight' : '') + (c._nomatch ? ' sv-nomatch' : '') + '" data-i="' + i + '" data-case="' + esc(c.caseKey) + '" data-state="' + esc(c.listState) + '" data-match="' + esc(match) + '" data-path="' + esc(c.editPath || '') + '"><td>' + cells.join('</td><td>') + '</td></tr>';
   }
   function renderTable() {
     var host = $('qList');
@@ -252,19 +262,33 @@
   function line(label, value) { var d = el('div', 'meta'); d.appendChild(el('b', null, label + ': ')); var s = el('span', null, value === undefined || value === null || value === '' ? '—' : value); s.setAttribute('dir', 'auto'); d.appendChild(s); return d; }
   function closeForm() {
     var f = document.querySelector('#svBody tr.sv-form-row'); if (f) f.remove();
-    openIdx = -1;
+    openIdx = -1; activeEditor = null;
   }
-  /** The inline editor opens right under the row (no navigation). A second click on Edit closes it. */
-  function openCorrection(i) {
+  // ---- selection (keyboard focus ring) ----
+  function rowEl(i) { return document.querySelector('#svBody tr.sv-row[data-i="' + i + '"]'); }
+  function selectRow(i, opts) {
+    opts = opts || {};
+    if (!rows.length) return;
+    i = Math.max(0, Math.min(rows.length - 1, i));
+    var old = document.querySelector('#svBody tr.sv-selected'); if (old) old.classList.remove('sv-selected');
+    var tr0 = rowEl(i); selIdx = i; if (!tr0) return;
+    tr0.classList.add('sv-selected');
+    if (!opts.noFocus) { try { tr0.focus({ preventScroll: true }); } catch (e) { /* ignore */ } }
+    try { tr0.scrollIntoView({ block: 'nearest' }); } catch (e) { /* ignore */ }
+  }
+  function nextEditable(i) { for (var j = i + 1; j < rows.length; j++) if (canEditRow(rows[j]) && !rows[j]._pending) return j; return -1; }
+  /** The inline editor opens right under the row (no navigation) with the keyboard focus in the first useful field. A second click on Edit closes it (force = open anyway). */
+  function openCorrection(i, force) {
     var wasOpen = openIdx === i; closeForm();
-    if (wasOpen) return;
-    var c = rows[i], tr0 = document.querySelector('#svBody tr[data-i="' + i + '"]');
-    if (!c || !tr0 || !canEditRow(c)) return;
+    if (wasOpen && !force) return;
+    var c = rows[i], tr0 = rowEl(i);
+    if (!c || !tr0 || !canEditRow(c) || c._pending) return;
     var fr = el('tr', 'sv-form-row'), td = el('td'); td.colSpan = COLS.length; fr.appendChild(td);
-    tr0.insertAdjacentElement('afterend', fr); openIdx = i;
+    tr0.insertAdjacentElement('afterend', fr); openIdx = i; selectRow(i, { noFocus: true });
     var holder = el('div', 'sv-case'); holder.setAttribute('data-case', c.caseKey); holder.setAttribute('data-path', c.editPath || ''); td.appendChild(holder);
     renderCase(holder, c);
-    var f0 = holder.querySelector('.sv-reason'); if (f0 && f0.focus) { try { f0.focus({ preventScroll: true }); } catch (e) { /* ignore */ } }
+    try { fr.scrollIntoView({ block: 'nearest' }); } catch (e) { /* ignore */ }
+    if (activeEditor && activeEditor.focusFirst) activeEditor.focusFirst();
   }
   function requiredMin(c) {
     var h = c.hours; if (h && has(h.requiredMin)) return h.requiredMin;
@@ -272,7 +296,7 @@
     if (s && validTime(s.start) && validTime(s.end)) { var d = toMin(s.end) - toMin(s.start); return d <= 0 ? d + 1440 : d; }
     return null;
   }
-  function renderCase(holder, c) {
+  function renderCase(holder, c, preset, initialMsg) {
     clear(holder);
     var top = el('div', 'emp-top'); top.appendChild(el('span', 'emp-name', c.employeeName)); top.lastChild.setAttribute('dir', 'auto');
     top.appendChild(el('span', 'emp-code', '#' + c.employeeCode + ' · ' + (c.designation || '') + ' · ' + c.workDate + ' · ' + (c.zone || '')));
@@ -285,68 +309,86 @@
     var l4 = line('Zone Manager decision / قرار مدير المنطقة', (c.zmStatus || '—') + (c.zmBy ? ' · ' + c.zmBy : '') + (c.zmAt ? ' · ' + c.zmAt : '')); l4.classList.add('sv-info-zm'); holder.appendChild(l4);
     holder.appendChild(line('Issues / الملاحظات', (c.issues || []).join(', ') || 'none'));
     if (c.correction) holder.appendChild(line('Current correction / التصحيح الحالي', c.correction.type + ' v' + c.correction.version + ' · In ' + (c.correction.approvedIn || '—') + ' · Out ' + (c.correction.approvedOut || '—') + ' · ' + (c.correction.by || '') + ' · ' + (c.correction.at || '') + (pathText(c.correction.approvalPath) ? ' · ' + pathText(c.correction.approvalPath) : '')));
-    if (c.editPath === 'DIRECT_APPROVAL') { var nt = el('div', 'notice sv-direct-notice', DIRECT_NOTICE); nt.setAttribute('dir', 'auto'); holder.appendChild(nt); }
+    if (c.editPath === 'DIRECT_APPROVAL') { var nt = el('div', 'sv-direct-notice', DIRECT_NOTICE); nt.setAttribute('dir', 'auto'); holder.appendChild(nt); }
+    if (isAdmin()) { var an = el('div', 'sv-admin-note', ADMIN_NOTICE); an.setAttribute('dir', 'auto'); holder.appendChild(an); }
     var res = el('div', 'meta sv-res'); res.setAttribute('role', 'status'); res.setAttribute('aria-live', 'polite');
-    holder.appendChild(caseForm(holder, c, res));
+    holder.appendChild(caseForm(holder, c, res, preset));
     holder.appendChild(res);
+    if (initialMsg) { res.textContent = initialMsg; res.className = 'meta sv-res report-error'; }
   }
-  function caseForm(holder, c, res) {
+  /** "0815" -> "08:15" while typing; "815" / "8:15" are completed when the field is left. */
+  function typedTime(v) { return /^\d{4}$/.test(v) ? v.slice(0, 2) + ':' + v.slice(2) : v; }
+  function finishTime(v) { return /^\d{3}$/.test(v) ? '0' + v.charAt(0) + ':' + v.slice(1) : (/^\d:\d{2}$/.test(v) ? '0' + v : v); }
+  function caseForm(holder, c, res, preset) {
     var form = el('div', 'filter-bar sv-editor'), sg = c.suggested || {}, sh = c.scheduledShift, direct = c.editPath === 'DIRECT_APPROVAL';
     var rec = c.recorded || {}, origIn = hhmm(c.checkIn), origOut = hhmm(c.checkOut), origNext = !!c.checkOut && dateOf(c.checkOut) > c.workDate;
     var missing = c.missing || [];
     function field(label, node) { var f = el('div', 'filter-field'); f.appendChild(el('label', null, label)); f.appendChild(node); form.appendChild(f); return f; }
     var inTime = el('input'), outTime = el('input'), next = el('input'), inSched = el('button', 'btn-secondary sv-use-in', 'Use scheduled time / وقت الوردية'), outSched = el('button', 'btn-secondary sv-use-out', 'Use scheduled time / وقت الوردية');
-    inTime.type = 'time'; outTime.type = 'time'; next.type = 'checkbox'; inSched.type = 'button'; outSched.type = 'button';
-    inTime.className = 'sv-in-time'; outTime.className = 'sv-out-time'; next.className = 'sv-next';
+    [inTime, outTime].forEach(function (t) { t.type = 'text'; t.setAttribute('inputmode', 'numeric'); t.maxLength = 5; t.placeholder = 'HH:mm'; t.autocomplete = 'off'; t.setAttribute('dir', 'ltr'); });
+    next.type = 'checkbox'; inSched.type = 'button'; outSched.type = 'button';
+    inTime.className = 'sv-in-time sv-time'; outTime.className = 'sv-out-time sv-time'; next.className = 'sv-next';
+    inTime.setAttribute('aria-label', 'Check-in time HH:mm'); outTime.setAttribute('aria-label', 'Check-out time HH:mm');
+    // the helpers and the next-day tick-box stay out of the Tab order: Tab goes check-in -> check-out -> reason -> note -> Save
+    next.tabIndex = -1; inSched.tabIndex = -1; outSched.tabIndex = -1;
     inTime.value = origIn; outTime.value = origOut; next.checked = origNext;
     var fi = field('Check-in time / وقت الدخول', inTime); if (sh) fi.appendChild(inSched);
     var fo = field('Check-out time / وقت الخروج', outTime); if (sh) fo.appendChild(outSched);
     var nl = el('label', 'sv-next-label'); nl.appendChild(next); nl.appendChild(document.createTextNode(' Next day / اليوم التالي')); var fn = el('div', 'filter-field'); fn.appendChild(nl); form.appendChild(fn);
-    var reason = el('input'), evidence = el('input');
-    reason.type = 'text'; reason.maxLength = 500; reason.setAttribute('dir', 'auto'); reason.style.width = '18em'; reason.className = 'sv-reason';
-    evidence.type = 'text'; evidence.maxLength = 500; evidence.setAttribute('dir', 'auto'); evidence.style.width = '18em'; evidence.className = 'sv-evidence';
-    field('Reason (required) / السبب', reason); field('Evidence (optional, defaults to the reason) / الدليل', evidence);
-    var override = null;
-    if (isAdmin()) {
-      override = el('input'); override.type = 'checkbox'; override.className = 'sv-override'; override.id = 'svOverride';
-      var of = el('div', 'filter-field sv-admin-box'), lb = el('label', null, 'I am intervening as administrator / أتدخل بصفتي مسؤولًا (required)'); lb.setAttribute('for', 'svOverride');
-      of.appendChild(override); of.appendChild(lb); form.appendChild(of);
-    }
+    var rsel = el('select', 'sv-reason'), note = el('input', 'sv-note');
+    var ph = el('option', null, 'Choose a reason / اختر السبب'); ph.value = ''; rsel.appendChild(ph);
+    REASONS.forEach(function (r) { var o = el('option', null, r.label); o.value = r.id; rsel.appendChild(o); });
+    rsel.setAttribute('dir', 'auto'); rsel.setAttribute('aria-label', 'Reason');
+    note.type = 'text'; note.maxLength = 300; note.setAttribute('dir', 'auto'); note.autocomplete = 'off'; note.setAttribute('aria-label', 'Note');
+    var want = preset && preset.reason !== undefined ? preset.reason : lastReason;
+    rsel.value = REASONS.some(function (r) { return r.id === want; }) ? want : '';
+    note.value = preset && preset.note ? preset.note : '';
+    var noteLabel = el('label', null, 'Note / ملاحظة');
+    var nf = el('div', 'filter-field'); nf.appendChild(noteLabel); nf.appendChild(note);
+    field('Reason (required) / السبب', rsel); form.appendChild(nf);
     var preview = el('div', 'sv-preview'); preview.setAttribute('role', 'status');
     var save = el('button', 'btn-primary sv-save', 'Save & Approve / حفظ واعتماد'), cancel = el('button', 'btn-secondary sv-cancel', 'Cancel / إلغاء');
     save.type = 'button'; cancel.type = 'button';
     var bf = el('div', 'filter-field sv-actions'); bf.appendChild(save); bf.appendChild(cancel);
     var foot = el('div', 'sv-editor-foot'); foot.appendChild(preview); foot.appendChild(bf);
+    foot.appendChild(el('span', 'meta sv-editor-keys', 'Ctrl+Enter = Save & Approve · Esc = Cancel · N = skip / تخطي'));
     form.appendChild(foot);
     if (sg.basis) res.textContent = 'Suggestion: ' + sg.basis;
     var rq = requiredMin(c), working = false;
     function worked() { if (!validTime(inTime.value) || !validTime(outTime.value)) return null; return toMin(outTime.value) - toMin(inTime.value) + (next.checked ? 1440 : 0); }
+    function noteSync() { var other = rsel.value === 'other'; noteLabel.textContent = other ? 'Note (required, 5+ characters) / ملاحظة (مطلوبة)' : 'Note / ملاحظة'; note.classList.toggle('sv-note-required', other); }
     function sync() {
       var w = worked(), t;
       if (w === null) t = 'Worked hours: enter both times to see the result. / أدخل الوقتين لعرض الساعات.' + (rq !== null ? ' Required: ' + fmtMin(rq) + '.' : '');
       else if (w <= 0) t = 'Check-out is not after check-in - tick "Next day" for a shift that ends the next day. / الخروج قبل الدخول.';
       else t = 'Worked hours / الساعات: ' + fmtMin(w) + (rq !== null ? ' · Required: ' + fmtMin(rq) + ' · Variance: ' + (w - rq >= 0 ? '+' : '-') + fmtMin(Math.abs(w - rq)) : '');
       preview.textContent = t;
-      var needTick = !!(override && !override.checked);
-      save.disabled = working || needTick; save.title = needTick ? 'Tick "I am intervening as administrator" first.' : '';
+      save.disabled = working; noteSync();
     }
-    ['input', 'change'].forEach(function (ev) { inTime.addEventListener(ev, sync); outTime.addEventListener(ev, sync); next.addEventListener(ev, sync); });
-    if (override) override.addEventListener('change', sync);
-    inSched.addEventListener('click', function () { if (sh) { inTime.value = sh.start; sync(); } });
+    function autoNext() { if (validTime(inTime.value) && validTime(outTime.value)) next.checked = toMin(outTime.value) < toMin(inTime.value); }
+    [inTime, outTime].forEach(function (t) {
+      t.addEventListener('input', function () { var v = typedTime(t.value); if (v !== t.value) t.value = v; autoNext(); sync(); });
+      t.addEventListener('change', function () { autoNext(); sync(); });
+      t.addEventListener('blur', function () { var v = finishTime(t.value); if (v !== t.value) { t.value = v; autoNext(); sync(); } });
+      t.addEventListener('focus', function () { try { t.select(); } catch (e) { /* ignore */ } });
+    });
+    ['input', 'change'].forEach(function (ev) { next.addEventListener(ev, sync); rsel.addEventListener(ev, sync); });
+    inSched.addEventListener('click', function () { if (sh) { inTime.value = sh.start; autoNext(); sync(); } });
     outSched.addEventListener('click', function () { if (sh) { outTime.value = sh.end; next.checked = !!(sh.endDate && sh.endDate !== c.workDate) || toMin(sh.end) <= toMin(sh.start); sync(); } });
-    cancel.addEventListener('click', function () { closeForm(); });
+    cancel.addEventListener('click', function () { var i = idxByKey[c.caseKey]; closeForm(); selectRow(i === undefined ? selIdx : i); });
     sync();
     var attempt = null; // { sig, id } - one requestId per attempt; reused only when the identical request is retried
     /** SET + time for each changed punch, KEEP for each unchanged one (an unchanged punch of an active correction that differs from the recorded punch is re-sent as SET so the correction keeps it), CONFIRM when nothing changed and no correction exists. */
     function build() {
-      var rs = reason.value.trim(), changedIn = inTime.value !== origIn, changedOut = outTime.value !== origOut || (!!outTime.value && next.checked !== origNext), err = '';
+      var err = '', changedIn = inTime.value !== origIn, changedOut = outTime.value !== origOut || (!!outTime.value && next.checked !== origNext), rs = '';
+      var rr = REASONS.filter(function (r) { return r.id === rsel.value; })[0], nt = note.value.trim();
+      if (!rr) err = 'Choose a reason. / اختر السبب.';
+      else if (rr.id === 'other' && nt.length < 5) err = 'Write a note of at least 5 characters for "Other". / اكتب ملاحظة (5 أحرف على الأقل).';
+      else rs = rr.label + (nt ? ' - ' + nt : '');
       var p = { caseKey: c.caseKey, expectedVersion: c.version, expectedStamp: c.rowStamp, reason: rs, confirm: true };
-      if (override && override.checked) p.adminOverride = true;
+      if (isAdmin()) p.adminOverride = true; // automatic: the backend still requires it and enforces every gate
       if (direct) p.directApproval = true;
-      if (override && !override.checked) err = 'Tick "I am intervening as administrator" first. / علّم خانة التدخل.';
-      else if (!rs) err = 'A reason is required. / السبب مطلوب.';
-      else if (direct && rs.length < 5) err = 'A direct approval needs a reason of at least 5 characters. / السبب 5 أحرف على الأقل.';
-      else if ((changedIn && !validTime(inTime.value)) || (changedOut && !validTime(outTime.value))) err = 'Enter a valid HH:mm time (a recorded punch cannot be cleared). / أدخل وقتًا صحيحًا.';
+      if (!err && ((changedIn && !validTime(inTime.value)) || (changedOut && !validTime(outTime.value)))) err = 'Enter a valid HH:mm time (a recorded punch cannot be cleared). / أدخل وقتًا صحيحًا.';
       if (err) return { err: err };
       var keepOrSet = function (cur, rcd, orig, isOut) {
         if (!cur || !c.correction || cur === rcd) return { mode: 'KEEP' };
@@ -357,15 +399,16 @@
         p.checkIn = changedIn ? { mode: 'SET', time: inTime.value } : keepOrSet(c.checkIn, rec.checkIn, origIn, false);
         p.checkOut = changedOut ? { mode: 'SET', time: outTime.value, nextDay: next.checked } : keepOrSet(c.checkOut, rec.checkOut, origOut, true);
         if (p.checkIn.mode === 'KEEP' && !c.checkIn && p.checkOut.mode === 'KEEP') return { err: 'Enter the missing punch time. / أدخل وقت البصمة الناقصة.' };
-        if (p.checkIn.mode === 'SET' || p.checkOut.mode === 'SET') p.evidence = evidence.value.trim() || rs;
-        return { p: p };
+        if (p.checkIn.mode === 'SET' || p.checkOut.mode === 'SET') p.evidence = rs; // evidence = the reason text (every predefined label is >= 5 characters)
+        return { p: p, reasonId: rr.id };
       }
       if (missing.length) return { err: 'A punch is missing: enter its time. / أدخل وقت البصمة الناقصة.' };
       if (c.correction) return { err: 'Nothing changed - edit a time first. / لم يتغير شيء.' };
       p.action = 'CONFIRM'; p.checkIn = { mode: 'KEEP' }; p.checkOut = { mode: 'KEEP', nextDay: false };
-      return { p: p };
+      return { p: p, reasonId: rr.id };
     }
     function submit() {
+      if (working) return;
       var b = build();
       if (b.err) { res.textContent = b.err; res.className = 'meta sv-res report-error'; return; }
       var p = b.p, sig = JSON.stringify(p);
@@ -374,27 +417,131 @@
       working = true; sync(); res.textContent = 'Saving…'; res.className = 'meta sv-res';
       opWrite('svCorrect', p, c.workDate, c.workDate, function (n) { res.textContent = 'Busy - retrying… (' + n + ' of 3) / النظام مشغول - إعادة المحاولة…'; res.className = 'meta sv-res'; }).then(function (r) {
         working = false;
-        if (r.ok) {
-          attempt = null;
-          var m = (r.unchanged ? 'No change (already in this state). ' : 'Saved & approved. ') + c.employeeCode + ' · ' + c.workDate + (r.row ? ' · In ' + (r.row.checkIn || '—') + ' · Out ' + (r.row.checkOut || '—') + ' · ' + (r.row.attendanceStatus || '') : '') + (r.approvalPath ? ' · ' + (pathText(r.approvalPath) || r.approvalPath) : '');
-          closeForm();
-          setMsg('qResult', m, false); $('qResult').className = 'meta zo-saved';
-          loadList('', { args: loaded ? loaded.args : qArgs(), keepResult: true, focus: c.caseKey });
-          return;
-        }
+        if (r.ok) { attempt = null; rememberReason(b.reasonId); afterSave(c, r); return; }
         sync();
         if (r.code === 'VERSION_CONFLICT' || r.code === 'APPLY_FAILED' || r.code === 'REQUEST_ID_CONFLICT') attempt = null; // a rolled-back / refused attempt is retried as a NEW request
         var t = 'NOT saved: ' + (CODE_TEXT[r.code] ? CODE_TEXT[r.code] + ' ' : '') + (r.error || r.code || '') + (r.code ? ' [' + r.code + ']' : '');
-        if (RELOAD_CODES.indexOf(r.code) !== -1) {
-          closeForm(); setMsg('qResult', t + ' The list was reloaded.', true);
-          loadList('', { args: loaded ? loaded.args : qArgs(), keepResult: true, focus: c.caseKey });
+        if (r.code === 'VERSION_CONFLICT') { // refresh ONLY this record and keep the editor open with the current values
+          var keep = { reason: rsel.value, note: note.value }, key = c.caseKey;
+          res.textContent = t + ' Refreshing this record… '; res.className = 'meta sv-res report-error';
+          setMsg('qResult', t, true);
+          refreshRecord(key).then(function (out) {
+            var i = idxByKey[key];
+            if (out && out.row && i !== undefined && openIdx === i && holder.isConnected) renderCase(holder, out.row, keep, t + ' The current values are shown - check them and press Save & Approve again. / راجع القيم الحالية ثم احفظ مجددًا.');
+            else if (holder.isConnected) { res.textContent = t + ' The record could not be refreshed - press Load.'; res.className = 'meta sv-res report-error'; }
+          });
+          return;
+        }
+        if (RELOAD_CODES.indexOf(r.code) !== -1) { // the permission / state changed: refresh only this record, close the editor
+          closeForm(); setMsg('qResult', t + ' The record was refreshed.', true);
+          refreshRecord(c.caseKey).then(function (out) { if (!out || !out.row) setMsg('qResult', t + ' The record is no longer available to you - press Load.', true); });
           return;
         }
         res.textContent = t; res.className = 'meta sv-res report-error';
       });
     }
     save.addEventListener('click', submit);
+    activeEditor = { holder: holder, submit: submit, cancel: function () { cancel.click(); },
+      focusFirst: function () { var f = !c.checkIn ? inTime : (!c.checkOut ? outTime : inTime); try { f.focus({ preventScroll: true }); f.select(); } catch (e) { /* ignore */ } } };
     return form;
+  }
+  // ---- in-place update after a save (no full list reload) ----
+  var COUNT_OF_MATCH = { MATCHED: 'matched', UNMATCHED: 'unmatched', MISSING_CHECK_IN: 'missingIn', MISSING_CHECK_OUT: 'missingOut', NOT_COMPUTABLE: 'notComputable' };
+  function bucketsOf(c) { var b = ['total']; if (COUNT_OF_MATCH[c.matchStatus]) b.push(COUNT_OF_MATCH[c.matchStatus]); if (c.listState) b.push(String(c.listState).toLowerCase()); return b; }
+  function adjustCounts(oldRow, newRow) {
+    if (!counts) return;
+    bucketsOf(oldRow).forEach(function (k) { counts[k] = Math.max(0, (counts[k] || 0) - 1); });
+    bucketsOf(newRow).forEach(function (k) { counts[k] = (counts[k] || 0) + 1; });
+    renderCounts();
+  }
+  function matchesStatus(c, st) { return !st || st === 'ALL' || (COUNT_OF_MATCH[st] ? c.matchStatus === st : c.listState === st); }
+  function makeRow(c, i) { var tb = document.createElement('tbody'); tb.innerHTML = rowHtml(c, i); return tb.firstChild; }
+  function replaceRow(i, c2) {
+    var old = rows[i], st = loaded && loaded.args ? loaded.args.status : 'ALL';
+    c2._nomatch = !matchesStatus(c2, st); c2._updated = true;
+    rows[i] = c2; adjustCounts(old, c2);
+    var tr0 = rowEl(i);
+    if (tr0) { var n = makeRow(c2, i); if (selIdx === i) n.classList.add('sv-selected'); tr0.replaceWith(n); }
+  }
+  /** The row as the svCorrect answer describes it (immediate feedback; the authoritative record follows from svList). */
+  function patchedRow(c, r) {
+    var n = Object.assign({}, c), rw = r.row || {};
+    if (rw.checkIn !== undefined) { n.checkIn = rw.checkIn || ''; n.current = Object.assign({}, c.current, { checkIn: n.checkIn }); }
+    if (rw.checkOut !== undefined) { n.checkOut = rw.checkOut || ''; n.current = Object.assign({}, n.current || c.current, { checkOut: n.checkOut }); }
+    if (rw.attendanceStatus) n.attendanceStatus = rw.attendanceStatus;
+    var wm = rw.workedMinutes !== undefined && rw.workedMinutes !== '' ? Number(rw.workedMinutes) : null;
+    if (wm !== null && !isNaN(wm)) { var h = Object.assign({}, c.hours || {}); h.actualMin = wm; if (has(h.requiredMin)) h.varianceMin = wm - h.requiredMin; n.hours = h; }
+    n.listState = 'CORRECTED'; n.correctionStatus = r.state === 'CONFIRMED' ? 'CONFIRMED' : 'CORRECTED';
+    n.correction = { correctionId: r.correctionId, version: r.version, type: r.type || (r.state === 'CONFIRMED' ? 'CONFIRMED' : 'CORRECTED'), approvedIn: n.checkIn, approvedOut: n.checkOut, by: '', at: '', approvalPath: r.approvalPath || 'ZM_GATE' };
+    if (r.version !== undefined) n.version = r.version;
+    n._pending = true; // rowStamp is unknown until the single-record refresh answers
+    return n;
+  }
+  /** Refreshes ONE record: svList for its date / zone / code (view ALL, status ALL) and replaces the row with the authoritative version. */
+  function refreshRecord(key) {
+    var i = idxByKey[key]; if (i === undefined) return Promise.resolve(null);
+    var c = rows[i], seq = loadSeq, a = { from: c.workDate, to: c.workDate, zone: c.zone, code: c.employeeCode, view: 'ALL', status: 'ALL' };
+    function settle(res2) {
+      if (seq !== loadSeq) return null; // a full Load replaced the list meanwhile
+      var j = idxByKey[key]; if (j === undefined) return null;
+      var fresh = res2 && res2.ok ? (res2.rows || []).filter(function (x) { return x.caseKey === key; })[0] : null;
+      if (fresh) { replaceRow(j, fresh); return { row: fresh }; }
+      var g = Object.assign({}, rows[j], { _pending: false, canEdit: false, canCorrect: false, readOnlyReason: res2 && res2.ok ? 'NOT_AVAILABLE' : 'REFRESH_FAILED', editPath: '' });
+      replaceRow(j, g); return { row: null, error: res2 && (res2.error || res2.code) };
+    }
+    return op('svList', a, c.workDate, c.workDate).then(settle, function () { return settle(null); });
+  }
+  function afterSave(c, r) {
+    var i = idxByKey[c.caseKey];
+    var m = (r.unchanged ? 'No change (already in this state). ' : 'Saved & approved. ') + c.employeeCode + ' · ' + c.workDate + (r.row ? ' · In ' + (r.row.checkIn || '—') + ' · Out ' + (r.row.checkOut || '—') + ' · ' + (r.row.attendanceStatus || '') : '') + (r.approvalPath ? ' · ' + (pathText(r.approvalPath) || r.approvalPath) : '');
+    closeForm();
+    setMsg('qResult', m, false); $('qResult').className = 'meta zo-saved';
+    if (i === undefined) return;
+    replaceRow(i, patchedRow(rows[i], r));
+    refreshRecord(c.caseKey).then(function (out) {
+      var q = $('qResult');
+      if (out && out.row && out.row._nomatch) q.textContent = q.textContent + ' (updated - no longer matches the filter / لم يعد ضمن الفلتر)';
+      else if (out && !out.row) setMsg('qResult', m + ' Saved, but this record could not be refreshed - press Load.', true);
+    });
+    if (autoAdv) {
+      var j = nextEditable(i);
+      if (j >= 0) { openCorrection(j, true); return; }
+      $('qResult').textContent = $('qResult').textContent + ' No further editable record below.';
+    }
+    selectRow(i);
+  }
+  function skipNext() {
+    var from = openIdx >= 0 ? openIdx : selIdx, j = nextEditable(from);
+    if (j < 0) { setMsg('qResult', 'No further editable record below. / لا توجد سجلات قابلة للتعديل بعد هذا.', false); return; }
+    openCorrection(j, true);
+  }
+  // ---- keyboard (high volume) ----
+  function isField(t) { return !!t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA'); }
+  function onKey(ev) {
+    var pane = $('svPaneQueue'); if ($('svMain').hidden || pane.hidden || ev.altKey || ev.isComposing) return;
+    var t = ev.target, k = ev.key, ctrl = ev.ctrlKey || ev.metaKey;
+    if (!t || !t.closest) return;
+    if (!t.closest('#svPaneQueue') && t !== document.body && t !== document.documentElement) return; // focus on the page itself (after Load / Esc) still works
+    var inEd = !!t.closest('.sv-case');
+    if (isField(t) && !inEd) return; // typing in the filter inputs / selects: never hijacked
+    if (activeEditor && k === 'Enter' && ctrl) { ev.preventDefault(); activeEditor.submit(); return; }
+    if (activeEditor && k === 'Escape') { ev.preventDefault(); activeEditor.cancel(); return; }
+    if (ctrl) return;
+    if (inEd) {
+      var typing = t.classList && t.classList.contains('sv-note');
+      if (k === 'Enter' && !ev.shiftKey && (t.tagName === 'SELECT' || typing)) { ev.preventDefault(); activeEditor.submit(); return; }
+      if ((k === 'n' || k === 'N') && !typing) { ev.preventDefault(); skipNext(); }
+      return;
+    }
+    if (k === 'ArrowDown' || k === 'j' || k === 'J') { ev.preventDefault(); selectRow(selIdx < 0 ? 0 : selIdx + 1); }
+    else if (k === 'ArrowUp' || k === 'k' || k === 'K') { ev.preventDefault(); selectRow(selIdx < 0 ? 0 : selIdx - 1); }
+    else if (k === 'Enter' || k === 'e' || k === 'E') {
+      if (k === 'Enter' && t.tagName === 'BUTTON') return; // a focused button keeps its own click
+      if (selIdx < 0) return;
+      ev.preventDefault();
+      if (canEditRow(rows[selIdx]) && !rows[selIdx]._pending) openCorrection(selIdx, true);
+      else setMsg('qResult', 'This record cannot be edited: ' + (RO_TEXT[rows[selIdx].readOnlyReason] || rows[selIdx].readOnlyReason || 'not editable'), false);
+    } else if ((k === 'n' || k === 'N') && activeEditor) { ev.preventDefault(); skipNext(); }
   }
   /** Export Excel: ALL matching rows (every page, current filters) - reuses the last complete load when the filters are unchanged, else loads again. */
   function exportList() {
@@ -600,6 +747,9 @@
   $('qLoad').addEventListener('click', function () { loadList(); });
   $('qExport').addEventListener('click', exportList);
   $('qList').addEventListener('click', function (ev) { var t = ev.target; if (t && t.classList && t.classList.contains('sv-open') && !t.disabled) openCorrection(+t.getAttribute('data-i')); });
+  $('qAuto').checked = autoAdv;
+  $('qAuto').addEventListener('change', function () { autoAdv = $('qAuto').checked; store('hmgSvAutoAdvance', autoAdv ? '1' : '0'); });
+  document.addEventListener('keydown', onKey);
   $('sLoad').addEventListener('click', function () { loadSchedule(); });
   $('sExport').addEventListener('click', exportExcel);
   $('hLoad').addEventListener('click', loadHistory);
