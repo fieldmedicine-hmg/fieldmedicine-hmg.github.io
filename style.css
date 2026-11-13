@@ -211,3 +211,12 @@ table.sv-table tr.sv-highlight td { background: #fff3b0; box-shadow: inset 0 0 0
 .tag-MATCHED { background: #d8f0dc; color: #14532d; }
 .tag-UNMATCHED, .tag-MISSING_CHECK_IN, .tag-MISSING_CHECK_OUT { background: #fbe0d6; color: #7a2e0e; }
 .tag-NOT_COMPUTABLE { background: #e6e6e6; color: #444; }
+
+/* V1.2 hotfix (2026-11-13, found in the live shared-link test): the records table is wider than the page, so the Actions column (Edit / تعديل)
+   and the inline editor scrolled out of view. Keep the Edit button pinned to the right edge and the editor pinned to the left edge of the
+   visible area of the table's horizontal scroller. */
+#svTable thead th:last-child,
+#svTable tbody tr:not(.sv-form-row) > td:last-child { position: sticky; right: 0; z-index: 1; }
+#svTable tbody tr:not(.sv-form-row) > td:last-child { background: #fff; box-shadow: -6px 0 6px -6px rgba(0, 0, 0, 0.35); }
+#svTable thead th:last-child { background: #1a1a1a; z-index: 2; }
+#svTable tr.sv-form-row > td > .sv-case { position: sticky; left: 0; box-sizing: border-box; width: 1040px; max-width: calc(100vw - 48px); }
