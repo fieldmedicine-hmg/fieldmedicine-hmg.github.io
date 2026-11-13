@@ -6,7 +6,7 @@
 <meta name="referrer" content="no-referrer">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src https://hmg-write-bridge-poc.fieldmedicine1.workers.dev; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';">
 <title>HMG Attendance Supervisor</title>
-<link rel="stylesheet" href="style.css?v=20261112a">
+<link rel="stylesheet" href="style.css?v=20261113v11">
 </head>
 <body>
 <div class="wrap analytics-wrap">
@@ -16,11 +16,12 @@
     <div><span id="svAccessState" class="access-state access-CHECKING">CHECKING&hellip;</span> <span id="svAccessWho" class="meta"></span></div>
     <div id="svAccessDetail" class="meta" role="status"></div>
     <div id="svRoleBanner" class="notice" hidden></div>
+    <div id="svScope" class="meta sv-scope"></div>
   </div>
 
   <div id="svMain" hidden>
     <div class="sv-tabs" role="tablist">
-      <button type="button" class="btn-primary" id="svTabQueue" role="tab" data-tab="queue">Corrections queue / طلبات التصحيح</button>
+      <button type="button" class="btn-primary" id="svTabQueue" role="tab" data-tab="queue">Unmatched records / السجلات غير المطابقة</button>
       <button type="button" class="btn-secondary" id="svTabSchedule" role="tab" data-tab="schedule">Shift schedule / جدول الورديات</button>
       <button type="button" class="btn-secondary" id="svTabHistory" role="tab" data-tab="history">History / السجل</button>
     </div>
@@ -32,10 +33,20 @@
         <div class="filter-field"><label for="qZone">Zone / المنطقة</label><select id="qZone"><option value="">All</option></select></div>
         <div class="filter-field"><label for="qEvent">Event / Area</label><select id="qEvent"><option value="">All</option></select></div>
         <div class="filter-field"><label for="qCode">Employee code / الرمز</label><input type="text" id="qCode" autocomplete="off" dir="ltr"></div>
-        <div class="filter-field"><button id="qLoad" class="btn-primary">Load / تحميل</button></div>
+        <div class="filter-field"><label for="qState">State / الحالة</label><select id="qState">
+          <option value="ALL">All / الكل</option>
+          <option value="PENDING">Pending Zone Manager / بانتظار مدير المنطقة</option>
+          <option value="APPROVED">Approved (ready to correct) / معتمد</option>
+          <option value="CORRECTED">Corrected / تم التصحيح</option>
+          <option value="REJECTED">Rejected / مرفوض</option>
+          <option value="FINAL">FINAL / نهائي</option></select></div>
+        <div class="filter-field"><button id="qLoad" class="btn-primary" type="button">Load / تحميل</button></div>
+        <div class="filter-field"><button id="qExport" class="btn-secondary" type="button">Export Excel / تصدير</button></div>
       </div>
       <div id="qStatus" class="meta" role="status"></div>
-      <div id="qBlocked" class="notice" hidden></div>
+      <div id="qResult" class="meta" role="status" aria-live="polite"></div>
+      <div id="qFiles"></div>
+      <div id="qCounts" class="sv-counts" hidden></div>
       <div id="qList"></div>
     </div>
 
@@ -54,6 +65,7 @@
       <div id="sFiles"></div>
       <div id="sList"></div>
 
+      <div id="sReadonlyNote" class="notice" hidden>Shift schedules are changed by attendance supervisors only. / تعديل الورديات لمشرفي الحضور فقط.</div>
       <div id="sAssign" class="control-card">
         <div class="group-title">Assign shifts / تعيين ورديات</div>
         <div class="filter-bar">
@@ -66,7 +78,7 @@
           <div class="filter-field"><label for="aTo">Date to (blank = single day)</label><input type="date" id="aTo"></div>
           <div class="filter-field"><label for="aStart">Start / البداية</label><input type="time" id="aStart"></div>
           <div class="filter-field"><label for="aEnd">End / النهاية</label><input type="time" id="aEnd"></div>
-          <div class="filter-field"><label for="aTol">Tolerance min (1-10)</label><input type="number" id="aTol" min="1" max="10" step="1" style="width:6em"></div>
+          <div class="filter-field"><label for="aTol">Tolerance min (1-10)</label><input type="number" id="aTol" class="sv-narrow" min="1" max="10" step="1"></div>
           <div class="filter-field"><label for="aNote">Note / ملاحظة</label><input type="text" id="aNote" maxlength="200" dir="auto"></div>
         </div>
         <div id="aPreview" class="meta"></div>
@@ -101,6 +113,6 @@
 <script src="net.js?v=20261112a"></script>
 <script src="access.js?v=20261112a"></script>
 <script src="xlsx.js?v=20261112a"></script>
-<script src="supervisor.js?v=20261113a"></script>
+<script src="supervisor.js?v=20261113v11"></script>
 </body>
 </html>

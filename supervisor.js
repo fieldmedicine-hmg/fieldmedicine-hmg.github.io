@@ -1,6 +1,6 @@
-// Attendance Supervisor page (2026-11-12): corrections queue, shift schedule, history.
-// Credential = the supervisor's personal access link (?adminToken=...) read once by access.js; an Analytics Admin gets read-only access.
-// All data is inserted with textContent (never innerHTML). Every write is confirmed first and sent once per attempt (requestId).
+// Attendance Supervisor page V1.1 (2026-11-13): unified list of ALL unmatched records (svList, paged + completeness check), shift schedule, history.
+// Credential = a supervisor's personal access link (?adminToken=...) read once by access.js (global or zone-limited), or an Analytics Admin (explicit intervention).
+// Data reaches the DOM only through textContent or esc() (HTML-escaped); no inline scripts (CSP script-src 'self'). Every write is confirmed first and sent once per attempt (requestId).
 (function () {
   'use strict';
   var A = window.HMGAccess;
@@ -22,6 +22,18 @@
   function op(name, args, from, to) {
     var f = from || A.todayRiyadh(), t = to || f;
     return A.call({ action: 'periodAnalytics', op: name, date: f, fromDate: f, toDate: t, opArgs: JSON.stringify(args || {}) }, TIMEOUT_MS);
+  }
+  /** A write that the backend answers with retryable:true (script lock busy) is sent again, up to 3 more times (2 s, 4 s, 6 s), with the SAME body (same requestId: the backend is idempotent per actor). */
+  var RETRY_BASE_MS = (function () { try { var m = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname) && /[?&]retryMs=(\d+)/.exec(location.search); if (m) return +m[1]; } catch (e) { /* default */ } return 2000; })();
+  function opWrite(name, args, from, to, onBusy) {
+    var n = 0;
+    function go() {
+      return op(name, args, from, to).then(function (r) {
+        if (r && r.retryable === true && n < 3) { n++; if (onBusy) onBusy(n); return new Promise(function (res) { setTimeout(res, RETRY_BASE_MS * n); }).then(go); }
+        return r;
+      });
+    }
+    return go();
   }
   function setOptions(sel, values) {
     var keep = sel.value; clear(sel);
@@ -56,8 +68,10 @@
   }
   function applyRole() {
     var b = $('svRoleBanner');
-    if (who.role === 'ADMIN_READONLY') { b.hidden = false; b.textContent = 'Read-only (administrator) / للقراءة فقط (مدير النظام)'; } else b.hidden = true;
-    $('sAssign').hidden = !canWrite();
+    if (isAdmin()) { b.hidden = false; b.textContent = 'Administrator intervention / تدخل المسؤول: you see the full list; a correction needs the explicit "I am intervening as administrator" tick-box and is recorded as ADMIN.'; } else b.hidden = true;
+    var sc = who.scope || {};
+    $('svScope').textContent = sc.zones ? 'Zones: ' + sc.zones.join(', ') : 'All zones';
+    $('sAssign').hidden = !canWrite(); $('sReadonlyNote').hidden = canWrite();
     $('aTol').value = who.toleranceDefaultMin || 5;
     var today = A.todayRiyadh(), y = shiftDays(today, -1);
     $('qFrom').value = y; $('qTo').value = today;
@@ -80,70 +94,163 @@
       }
       op('svWhoAmI', {}).then(function (r) {
         if (!r.ok) { $('svAccessDetail').textContent = 'You are not an attendance supervisor: ' + (r.error || r.code || ''); $('svMain').hidden = true; return; }
-        who = r; applyRole();
-        if (canWrite()) loadQueue();
-        else { showTab('history'); setMsg('qStatus', 'The corrections queue is available to the designated attendance supervisor only. / قائمة التصحيح متاحة لمشرف الحضور فقط.'); }
+        who = r; applyRole(); loadList();
       });
     });
   }
 
-  // ---------------- corrections queue ----------------
-  var cases = [];
+  // ---------------- unmatched records (svList: one unified list of ALL unmatched records) ----------------
+  var rows = [], counts = null, loaded = null /* {key, args} of the last COMPLETE load */, loadSeq = 0, openIdx = -1;
+  var COLS = ['Employee Code / الرمز', 'Employee Name / الاسم', 'Date / التاريخ', 'Event / Area', 'Zone / المنطقة', 'Check-in / الدخول', 'Check-out / الخروج', 'Scheduled Shift / الوردية', 'Missing Punch / الناقص', 'Zone Manager Approval Status / اعتماد مدير المنطقة', 'Supervisor Correction Status / تصحيح المشرف'];
+  var RO_TEXT = { AWAITING_ZONE_MANAGER: 'Waiting for the Zone Manager', ZM_REJECTED: 'Rejected by the Zone Manager', FINAL: 'FINAL - the zone day is closed' };
+  var CODE_TEXT = {
+    VERSION_CONFLICT: 'This record was changed by someone else.', ZONE_NOT_ALLOWED: 'This record belongs to a zone outside your access.',
+    AWAITING_ZONE_MANAGER: 'The Zone Manager has not approved this record yet.', ZM_REJECTED: 'The Zone Manager rejected this record.', FINAL: 'The zone day is FINAL.',
+    NO_PUNCH_EVIDENCE: 'A record without any real punch cannot be corrected.', EVIDENCE_REQUIRED: 'Evidence is required when a time is set manually.',
+    REQUEST_ID_CONFLICT: 'This request id was used by another user - try again (a new id is created).', NOT_AUTHORIZED: 'Your access is no longer valid.',
+    ADMIN_OVERRIDE_REQUIRED: 'Tick "I am intervening as administrator" first.', APPLY_FAILED: 'The change could not be applied and was rolled back - try again.'
+  };
+  var RELOAD_CODES = ['VERSION_CONFLICT', 'AWAITING_ZONE_MANAGER', 'ZM_REJECTED', 'FINAL', 'ZONE_NOT_ALLOWED', 'NOT_ELIGIBLE'];
+  function esc(s) { return String(s === undefined || s === null ? '' : s).replace(/[&<>"']/g, function (ch) { return ch === '&' ? '&amp;' : ch === '<' ? '&lt;' : ch === '>' ? '&gt;' : ch === '"' ? '&quot;' : '&#39;'; }); }
+  function isAdmin() { return !!(who && who.role === 'ADMIN'); }
+  /** Rows per request: 500 in production; a test override (window.HMG_SV_PAGE_SIZE or ?pageSize=) is honoured on localhost only. */
+  function pageSize() {
+    var n = 500;
+    try {
+      if (/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) {
+        var m = /[?&]pageSize=(\d+)/.exec(location.search), v = m ? +m[1] : +window.HMG_SV_PAGE_SIZE;
+        if (v >= 1 && v <= 1000) n = Math.floor(v);
+      }
+    } catch (e) { /* default */ }
+    return n;
+  }
+  var PAGE_SZ = pageSize(); // read once at start (the address bar is rewritten when the token is stripped)
   function qArgs() {
-    var a = { from: $('qFrom').value, to: $('qTo').value };
+    var a = { from: $('qFrom').value, to: $('qTo').value, state: $('qState').value || 'ALL' };
     if ($('qZone').value) a.zone = $('qZone').value;
     if ($('qEvent').value) a.event = $('qEvent').value;
     if ($('qCode').value.trim()) a.code = $('qCode').value.trim();
     return a;
   }
-  function loadQueue(note) {
-    var a = qArgs();
-    if (!a.from || !a.to || a.from > a.to) { setMsg('qStatus', 'Choose a valid date range.', true); return; }
-    $('qLoad').disabled = true; setMsg('qStatus', 'Loading…');
-    op('svQueue', a, a.from, a.to).then(function (r) {
-      $('qLoad').disabled = false;
-      if (!r.ok) { setMsg('qStatus', 'Could not load: ' + r.error, true); return; }
-      cases = r.cases || [];
-      setOptions($('qZone'), r.zones); setOptions($('qEvent'), r.events);
-      var b = r.blocked || {}, bx = $('qBlocked');
-      bx.hidden = false;
-      bx.textContent = 'Not listed (not yet approved by Zone Managers or already closed): awaiting Zone Manager ' + (b.AWAITING_ZONE_MANAGER || 0) + ' · rejected by Zone Manager ' + (b.ZM_REJECTED || 0) + ' · FINAL ' + (b.FINAL || 0) + '. / الحالات غير المعتمدة من مدير المنطقة لا تظهر هنا.';
-      setMsg('qStatus', (note ? note + ' ' : '') + cases.length + ' case(s).');
-      renderQueue();
+  function rangeError(a) {
+    if (!a.from || !a.to || a.from > a.to) return 'Choose a valid date range.';
+    if (Math.round((new Date(a.to + 'T12:00:00Z') - new Date(a.from + 'T12:00:00Z')) / 86400000) + 1 > 31) return 'At most 31 days per load. / الحد الأقصى 31 يومًا.';
+    return '';
+  }
+  /** Pages through svList until offset + rows >= total. Every page must carry the same signature and total, else the whole load restarts (max 3 attempts). */
+  function fetchAll(a, progress) {
+    var size = PAGE_SZ;
+    function attempt(n) {
+      var got = [], first = null;
+      function page(offset) {
+        return op('svList', Object.assign({}, a, { offset: offset, limit: size }), a.from, a.to).then(function (r) {
+          if (!r || !r.ok) return { fail: (r && (r.error || r.code)) || 'no answer' };
+          if (!first) first = r; else if (r.signature !== first.signature || r.total !== first.total) return { retry: true };
+          var rs = r.rows || [];
+          for (var i = 0; i < rs.length; i++) got.push(rs[i]);
+          if (progress) progress(Math.min(offset + rs.length, r.total), r.total);
+          if (offset + rs.length >= r.total) return {};
+          if (!rs.length) return { retry: true };
+          return page(offset + rs.length);
+        });
+      }
+      return page(0).then(function (s) {
+        if (s.fail) return { ok: false, error: s.fail };
+        var seen = {}, dup = 0;
+        if (!s.retry) got.forEach(function (c) { if (seen[c.caseKey]) dup++; seen[c.caseKey] = 1; });
+        if (s.retry || got.length !== first.total || dup) {
+          if (n < 3) { if (progress) progress(0, 0, n + 1); return attempt(n + 1); }
+          return { ok: false, error: 'The list changed while it was loading (3 attempts) - it is NOT shown, to avoid an incomplete list. Press Load again. / تغيرت القائمة أثناء التحميل.' };
+        }
+        return { ok: true, rows: got, first: first };
+      });
+    }
+    return attempt(1);
+  }
+  function setBusy(b) { $('qLoad').disabled = b; $('qExport').disabled = b; }
+  function adopt(r, a) {
+    rows = r.rows; counts = r.first.counts || {}; loaded = { key: JSON.stringify(a), args: a }; openIdx = -1;
+    setOptions($('qZone'), r.first.zones); setOptions($('qEvent'), r.first.events);
+    $('qZone').value = a.zone || ''; $('qEvent').value = a.event || '';
+    renderCounts(); renderTable();
+  }
+  function loadList(note, opts) {
+    opts = opts || {};
+    var a = opts.args || qArgs(), err = rangeError(a);
+    if (err) { setMsg('qStatus', err, true); return; }
+    var seq = ++loadSeq, keep = typeof opts.keepScroll === 'number' ? opts.keepScroll : (opts.keepScroll ? (window.pageYOffset || 0) : null);
+    setBusy(true); setMsg('qStatus', 'Loading…');
+    if (keep === null) setMsg('qResult', '');
+    fetchAll(a, function (n, t, restart) {
+      if (seq !== loadSeq) return;
+      setMsg('qStatus', restart ? 'The list changed while loading - restarting (attempt ' + restart + ' of 3)…' : 'Loading ' + n + ' / ' + t + '…');
+    }).then(function (r) {
+      if (seq !== loadSeq) return;
+      setBusy(false);
+      if (!r.ok) { rows = []; counts = null; loaded = null; openIdx = -1; clear($('qList')); $('qCounts').hidden = true; setMsg('qStatus', 'Could not load: ' + r.error, true); return; }
+      adopt(r, a);
+      setMsg('qStatus', (note ? note + ' ' : '') + 'All ' + rows.length + ' of ' + r.first.total + ' records loaded.' + (a.state !== 'ALL' ? ' (state filter: ' + a.state + ')' : ''));
+      if (keep !== null) window.scrollTo(0, keep);
     });
   }
-  function renderQueue() {
-    var host = $('qList'); clear(host);
-    if (!cases.length) { host.appendChild(el('div', 'empty-note', 'No cases in this range.')); return; }
-    var sorted = cases.slice().sort(function (x, y) { return (x.workDate + '|' + x.zone + '|' + x.event + '|' + x.employeeCode).localeCompare(y.workDate + '|' + y.zone + '|' + y.event + '|' + y.employeeCode); });
-    var lastDay = '', lastZE = '';
-    sorted.forEach(function (c) {
-      if (c.workDate !== lastDay) { host.appendChild(el('div', 'day-header', c.workDate)); lastDay = c.workDate; lastZE = ''; }
-      var ze = c.zone + '|' + c.event;
-      if (ze !== lastZE) { host.appendChild(el('div', 'group-title', (c.zone || '—') + ' · ' + (c.event || '—'))); lastZE = ze; }
-      var holder = el('div', 'sv-case'); holder.setAttribute('data-case', c.caseKey); host.appendChild(holder);
-      renderCase(holder, c);
-    });
+  function renderCounts() {
+    var box = $('qCounts'), c = counts || {};
+    var items = [['total', 'Total UNMATCHED / إجمالي غير المطابقة'], ['pending', 'Pending Zone Manager / بانتظار مدير المنطقة'], ['approved', 'Approved (ready to correct) / جاهز للتصحيح'], ['corrected', 'Corrected / مصحح'], ['rejected', 'Rejected / مرفوض'], ['final', 'FINAL / نهائي']];
+    box.innerHTML = items.map(function (it) { return '<span class="sv-count" data-k="' + it[0] + '"><b>' + esc(c[it[0]] || 0) + '</b> ' + esc(it[1]) + '</span>'; }).join('');
+    box.hidden = false;
+  }
+  function hhmm(s) { return s ? String(s).slice(-5) : ''; }
+  function tm(s, wd) { if (!s) return ''; var d = String(s).slice(0, 10), t = String(s).slice(-5); return d === wd ? t : String(s).slice(5); }
+  function shiftText(c) { var s = c.scheduledShift; return s ? s.start + ' - ' + s.end + (s.endDate && s.endDate !== c.workDate ? ' (+1d)' : '') : ''; }
+  function missText(c) { return (c.missing || []).map(function (m) { return m === 'CHECK_IN' ? 'Check-in' : 'Check-out'; }).join(', '); }
+  function rowHtml(c, i) {
+    var cor = c.correction, ro = !c.canCorrect;
+    var cells = [esc(c.employeeCode), '<span dir="auto">' + esc(c.employeeName) + '</span>', esc(c.workDate), '<span dir="auto">' + esc(c.event) + '</span>', '<span dir="auto">' + esc(c.zone) + '</span>',
+      esc(tm(c.checkIn, c.workDate) || 'MISSING'), esc(tm(c.checkOut, c.workDate) || 'MISSING'), esc(shiftText(c) || 'No schedule'), esc(missText(c) || '—'),
+      '<span class="tag tag-' + esc(c.zmStatus) + '">' + esc(c.zmStatus) + '</span>' + (c.zmBy ? ' <span dir="auto">' + esc(c.zmBy) + '</span>' : '')];
+    var last = '<span class="tag tag-' + esc(c.listState) + '" data-state="' + esc(c.listState) + '">' + esc(c.listState) + '</span> ' + esc(c.correctionStatus === 'NONE' ? 'No correction' : c.correctionStatus + (cor ? ' v' + cor.version : ''));
+    if (ro) last += '<div class="sv-ro-reason" data-reason="' + esc(c.readOnlyReason) + '">Read-only: ' + esc(RO_TEXT[c.readOnlyReason] || c.readOnlyReason || 'not correctable') + '</div>';
+    else last += ' <button type="button" class="btn-secondary sv-open" data-i="' + i + '">' + (c.correctionStatus === 'NONE' ? 'Correct / تصحيح' : 'Edit / تعديل') + '</button>';
+    cells.push(last);
+    return '<tr class="sv-row' + (ro ? ' sv-ro' : '') + '" data-i="' + i + '" data-case="' + esc(c.caseKey) + '" data-state="' + esc(c.listState) + '"><td>' + cells.join('</td><td>') + '</td></tr>';
+  }
+  function renderTable() {
+    var host = $('qList');
+    if (!rows.length) { host.innerHTML = '<div class="empty-note">No unmatched records match these filters. / لا توجد سجلات.</div>'; return; }
+    var html = new Array(rows.length);
+    for (var i = 0; i < rows.length; i++) html[i] = rowHtml(rows[i], i);
+    host.innerHTML = '<div class="table-scroll sv-list-scroll"><table class="data-table sv-table" id="svTable"><thead><tr><th>' + COLS.map(esc).join('</th><th>') + '</th></tr></thead><tbody id="svBody">' + html.join('') + '</tbody></table></div>';
   }
   function line(label, value) { var d = el('div', 'meta'); d.appendChild(el('b', null, label + ': ')); var s = el('span', null, value === undefined || value === null || value === '' ? '—' : value); s.setAttribute('dir', 'auto'); d.appendChild(s); return d; }
-  function hhmm(s) { return s ? String(s).slice(-5) : ''; }
+  function closeForm() {
+    var f = document.querySelector('#svBody tr.sv-form-row'); if (f) f.remove();
+    openIdx = -1;
+  }
+  function openCorrection(i) {
+    var wasOpen = openIdx === i; closeForm();
+    if (wasOpen) return;
+    var c = rows[i], tr0 = document.querySelector('#svBody tr[data-i="' + i + '"]');
+    if (!c || !tr0 || !c.canCorrect) return;
+    var fr = el('tr', 'sv-form-row'), td = el('td'); td.colSpan = COLS.length; fr.appendChild(td);
+    tr0.insertAdjacentElement('afterend', fr); openIdx = i;
+    var holder = el('div', 'sv-case'); holder.setAttribute('data-case', c.caseKey); td.appendChild(holder);
+    renderCase(holder, c);
+  }
   function renderCase(holder, c) {
     clear(holder);
     var top = el('div', 'emp-top'); top.appendChild(el('span', 'emp-name', c.employeeName)); top.lastChild.setAttribute('dir', 'auto');
-    top.appendChild(el('span', 'emp-code', '#' + c.employeeCode + ' · ' + (c.designation || '')));
-    top.appendChild(el('span', 'tag tag-' + (c.state === 'OPEN' ? 'PENDING' : c.state === 'CORRECTED' ? 'MODIFIED' : 'APPROVED'), c.state + ' v' + c.version));
+    top.appendChild(el('span', 'emp-code', '#' + c.employeeCode + ' · ' + (c.designation || '') + ' · ' + c.workDate));
     holder.appendChild(top);
     var s = c.scheduledShift;
-    holder.appendChild(line('Scheduled shift / الوردية', s ? s.start + ' - ' + s.end + (s.endDate && s.endDate !== c.workDate ? ' (+1d ' + s.endDate + ')' : '') + ' · ' + fmtMin(s.durationMin) + ' · tolerance ' + s.toleranceMin + ' min' : 'No schedule'));
+    holder.appendChild(line('Scheduled shift / الوردية', s ? s.start + ' - ' + s.end + (s.endDate && s.endDate !== c.workDate ? ' (+1d ' + s.endDate + ')' : '') + (s.durationMin ? ' · ' + fmtMin(s.durationMin) : '') + ' · tolerance ' + s.toleranceMin + ' min' : 'No schedule'));
     holder.appendChild(line('Recorded / المسجل', 'In ' + (c.recorded.checkIn || 'MISSING') + ' · Out ' + (c.recorded.checkOut || 'MISSING')));
     holder.appendChild(line('Missing / الناقص', (c.missing || []).join(', ') || 'none'));
     holder.appendChild(line('Issues / الملاحظات', (c.issues || []).join(', ')));
     holder.appendChild(line('Status / الحالة', c.attendanceStatus));
-    var ap = c.approval || {};
-    holder.appendChild(line('Zone Manager approval / اعتماد مدير المنطقة', (ap.gate || '—') + ' · ' + (ap.decision || '') + ' · ' + (ap.reviewer || '') + ' · ' + (ap.reviewedAt || '')));
-    if (c.correction) holder.appendChild(line('Current correction / التصحيح الحالي', c.correction.type + ' v' + c.correction.version + ' · In ' + (c.correction.approvedIn || '—') + ' · Out ' + (c.correction.approvedOut || '—') + ' · ' + (c.correction.supervisor || '') + ' · ' + (c.correction.appliedAt || '')));
+    holder.appendChild(line('Zone Manager approval / اعتماد مدير المنطقة', (c.zmStatus || '—') + ' · ' + (c.zmBy || '') + ' · ' + (c.zmAt || '')));
+    if (c.correction) holder.appendChild(line('Current correction / التصحيح الحالي', c.correction.type + ' v' + c.correction.version + ' · In ' + (c.correction.approvedIn || '—') + ' · Out ' + (c.correction.approvedOut || '—') + ' · ' + (c.correction.by || '') + ' · ' + (c.correction.at || '')));
     var res = el('div', 'meta'); res.setAttribute('role', 'status'); res.setAttribute('aria-live', 'polite');
-    if (canWrite()) holder.appendChild(caseForm(holder, c, res)); else holder.appendChild(el('div', 'meta', 'Read-only.'));
+    holder.appendChild(caseForm(holder, c, res));
     holder.appendChild(res);
   }
   function modeSelect(missing, hasShift) {
@@ -161,6 +268,7 @@
     var missIn = (c.missing || []).indexOf('CHECK_IN') !== -1, missOut = (c.missing || []).indexOf('CHECK_OUT') !== -1;
     function field(label, node) { var f = el('div', 'filter-field'); f.appendChild(el('label', null, label)); f.appendChild(node); form.appendChild(f); return f; }
     var inMode = modeSelect(missIn, hasShift), inTime = el('input'), outMode = modeSelect(missOut, hasShift), outTime = el('input'), next = el('input');
+    inMode.className = 'sv-in-mode'; outMode.className = 'sv-out-mode'; inTime.className = 'sv-in-time'; outTime.className = 'sv-out-time';
     inTime.type = 'time'; outTime.type = 'time'; next.type = 'checkbox';
     inTime.value = sg.checkIn || hhmm(c.recorded.checkIn); outTime.value = sg.checkOut || hhmm(c.recorded.checkOut); next.checked = !!sg.checkOutNextDay;
     // default = the suggestion: a missing punch -> the shift boundary (or a time to set); a recorded punch outside the shift -> the boundary
@@ -168,22 +276,36 @@
     inMode.value = dflt(missIn, sg.checkIn, hasShift ? c.scheduledShift.start : '', c.recorded.checkIn);
     outMode.value = dflt(missOut, sg.checkOut, hasShift ? c.scheduledShift.end : '', c.recorded.checkOut);
     var reason = el('input'), evidence = el('input');
-    reason.type = 'text'; reason.maxLength = 500; reason.setAttribute('dir', 'auto'); reason.style.width = '18em';
-    evidence.type = 'text'; evidence.maxLength = 500; evidence.setAttribute('dir', 'auto'); evidence.style.width = '18em';
-    var lbIn = field('Check-in / الدخول', inMode), tIn = field('Time (in)', inTime);
-    var lbOut = field('Check-out / الخروج', outMode), tOut = field('Time (out)', outTime), tNext = field('Next day / اليوم التالي', next);
+    reason.type = 'text'; reason.maxLength = 500; reason.setAttribute('dir', 'auto'); reason.style.width = '18em'; reason.className = 'sv-reason';
+    evidence.type = 'text'; evidence.maxLength = 500; evidence.setAttribute('dir', 'auto'); evidence.style.width = '18em'; evidence.className = 'sv-evidence';
+    field('Check-in / الدخول', inMode); var tIn = field('Time (in)', inTime);
+    field('Check-out / الخروج', outMode); var tOut = field('Time (out)', outTime), tNext = field('Next day / اليوم التالي', next);
     field('Reason (required) / السبب', reason); field('Evidence (required for SET) / الدليل', evidence);
-    var apply = el('button', 'btn-primary', 'Apply correction / تطبيق التصحيح'), conf = el('button', 'btn-secondary', 'Confirm times as correct / تأكيد الأوقات');
+    var override = null;
+    if (isAdmin()) {
+      override = el('input'); override.type = 'checkbox'; override.className = 'sv-override'; override.id = 'svOverride';
+      var of = el('div', 'filter-field sv-admin-box'), lb = el('label', null, 'I am intervening as administrator / أتدخل بصفتي مسؤولًا (required)'); lb.setAttribute('for', 'svOverride');
+      of.appendChild(override); of.appendChild(lb); form.appendChild(of);
+    }
+    var apply = el('button', 'btn-primary sv-apply', 'Apply correction / تطبيق التصحيح'), conf = el('button', 'btn-secondary sv-confirm', 'Confirm times as correct / تأكيد الأوقات');
     apply.type = 'button'; conf.type = 'button';
     var bf = el('div', 'filter-field'); bf.appendChild(apply); bf.appendChild(conf); form.appendChild(bf);
     if (sg.basis) res.textContent = 'Suggestion: ' + sg.basis;
-    if ((c.missing || []).length) { conf.disabled = true; conf.title = 'Cannot confirm while a punch is missing.'; }
-    if (c.state === 'CORRECTED') { conf.disabled = true; conf.title = 'This record already carries an approved correction - apply a new correction to change it.'; }
-    function sync() { tIn.hidden = inMode.value !== 'SET'; tOut.hidden = outMode.value !== 'SET'; tNext.hidden = outMode.value !== 'SET'; }
-    inMode.addEventListener('change', sync); outMode.addEventListener('change', sync); sync();
+    var confBlock = '';
+    if ((c.missing || []).length) confBlock = 'Cannot confirm while a punch is missing.';
+    else if (c.correctionStatus === 'CORRECTED') confBlock = 'This record already carries an approved correction - apply a new correction to change it.';
+    var working = false;
+    function sync() {
+      tIn.hidden = inMode.value !== 'SET'; tOut.hidden = outMode.value !== 'SET'; tNext.hidden = outMode.value !== 'SET';
+      var needTick = !!(override && !override.checked);
+      apply.disabled = working || needTick; conf.disabled = working || needTick || !!confBlock;
+      apply.title = needTick ? 'Tick "I am intervening as administrator" first.' : ''; conf.title = needTick ? apply.title : confBlock;
+    }
+    inMode.addEventListener('change', sync); outMode.addEventListener('change', sync); if (override) override.addEventListener('change', sync); sync();
     var attempt = null; // { sig, id } - one requestId per attempt; reused only when the identical request is retried
     function payload(action) {
       var p = { caseKey: c.caseKey, expectedVersion: c.version, expectedStamp: c.rowStamp, action: action, reason: reason.value.trim(), confirm: true };
+      if (override && override.checked) p.adminOverride = true;
       if (action === 'CONFIRM') { p.checkIn = { mode: 'KEEP' }; p.checkOut = { mode: 'KEEP', nextDay: false }; return p; }
       p.checkIn = { mode: inMode.value }; if (inMode.value === 'SET') p.checkIn.time = inTime.value;
       p.checkOut = { mode: outMode.value }; if (outMode.value === 'SET') { p.checkOut.time = outTime.value; p.checkOut.nextDay = next.checked; }
@@ -197,7 +319,8 @@
     }
     function submit(action) {
       var p = payload(action), err = '';
-      if (!p.reason) err = 'A reason is required. / السبب مطلوب.';
+      if (override && !override.checked) err = 'Tick "I am intervening as administrator" first. / علّم خانة التدخل.';
+      else if (!p.reason) err = 'A reason is required. / السبب مطلوب.';
       else if (action === 'CORRECT') {
         if (p.checkIn.mode === 'KEEP' && p.checkOut.mode === 'KEEP') err = 'Nothing to change: choose SCHEDULE or SET for a punch (or use Confirm).';
         else if ((p.checkIn.mode === 'SET' && !validTime(p.checkIn.time)) || (p.checkOut.mode === 'SET' && !validTime(p.checkOut.time))) err = 'Enter a valid HH:mm time.';
@@ -205,7 +328,7 @@
       }
       if (err) { res.textContent = err; res.className = 'meta report-error'; return; }
       var sched = c.scheduledShift;
-      var text = (action === 'CONFIRM' ? 'Confirm the recorded times as correct?\n' : 'Apply this correction?\n') + c.employeeCode + ' ' + c.employeeName + ' · ' + c.workDate + '\n' +
+      var text = (isAdmin() ? 'ADMINISTRATOR INTERVENTION / تدخل المسؤول\n' : '') + (action === 'CONFIRM' ? 'Confirm the recorded times as correct?\n' : 'Apply this correction?\n') + c.employeeCode + ' ' + c.employeeName + ' · ' + c.workDate + '\n' +
         'Original: In ' + (c.recorded.checkIn || 'MISSING') + ' / Out ' + (c.recorded.checkOut || 'MISSING') + '\n' +
         'Approved: In ' + describe(p.checkIn.mode, p.checkIn.time, false, c.recorded.checkIn, sched, false) + ' / Out ' + describe(p.checkOut.mode, p.checkOut.time, p.checkOut.nextDay, c.recorded.checkOut, sched, true) + '\n' +
         'Reason: ' + p.reason + (p.evidence ? '\nEvidence: ' + p.evidence : '');
@@ -213,28 +336,68 @@
       var sig = JSON.stringify(p);
       if (!attempt || attempt.sig !== sig) attempt = { sig: sig, id: newId() };
       p.requestId = attempt.id;
-      apply.disabled = true; conf.disabled = true; res.textContent = 'Saving…'; res.className = 'meta';
-      op('svCorrect', p, c.workDate, c.workDate).then(function (r) {
+      var y = window.pageYOffset || 0; // the position at the moment of the click is restored after the reload
+      working = true; sync(); res.textContent = 'Saving…'; res.className = 'meta';
+      opWrite('svCorrect', p, c.workDate, c.workDate, function (n) { res.textContent = 'Busy - retrying… (' + n + ' of 3) / النظام مشغول - إعادة المحاولة…'; res.className = 'meta'; }).then(function (r) {
+        working = false;
         if (r.ok) {
           attempt = null;
-          c.version = r.version; c.state = r.state || c.state;
-          if (r.row) c.correction = { correctionId: r.correctionId, version: r.version, type: r.type || (action === 'CONFIRM' ? 'CONFIRMED' : 'CORRECTED'), approvedIn: r.row.checkIn, approvedOut: r.row.checkOut, appliedAt: 'now', supervisor: who.signedInAs };
-          if (r.row) c.attendanceStatus = r.row.attendanceStatus || c.attendanceStatus;
-          renderCase(holder, c);
-          var note = holder.lastChild;
-          note.textContent = (r.unchanged ? 'No change (already in this state). ' : 'Saved. ') + (r.row ? 'In ' + (r.row.checkIn || '—') + ' · Out ' + (r.row.checkOut || '—') + ' · ' + (r.row.workedHours || '') + ' · ' + (r.row.attendanceStatus || '') : '');
-          note.className = 'meta zo-saved';
+          var m = (r.unchanged ? 'No change (already in this state). ' : 'Saved. ') + c.employeeCode + ' · ' + c.workDate + (r.row ? ' · In ' + (r.row.checkIn || '—') + ' · Out ' + (r.row.checkOut || '—') + ' · ' + (r.row.attendanceStatus || '') : '');
+          closeForm();
+          setMsg('qResult', m, false); $('qResult').className = 'meta zo-saved';
+          loadList('', { args: loaded ? loaded.args : qArgs(), keepScroll: y });
           return;
         }
-        apply.disabled = false; conf.disabled = (c.missing || []).length > 0 || c.state === 'CORRECTED';
-        if (r.code === 'VERSION_CONFLICT') { attempt = null; loadQueue('This case was changed elsewhere - the queue was reloaded.'); return; }
-        if (r.code === 'APPLY_FAILED') attempt = null; // a rolled-back attempt is retried as a NEW request
-        res.textContent = 'NOT saved: ' + (r.error || r.code) + (r.code ? ' [' + r.code + ']' : ''); res.className = 'meta report-error';
+        sync();
+        if (r.code === 'VERSION_CONFLICT' || r.code === 'APPLY_FAILED' || r.code === 'REQUEST_ID_CONFLICT') attempt = null; // a rolled-back / refused attempt is retried as a NEW request
+        var t = 'NOT saved: ' + (CODE_TEXT[r.code] ? CODE_TEXT[r.code] + ' ' : '') + (r.error || r.code || '') + (r.code ? ' [' + r.code + ']' : '');
+        if (RELOAD_CODES.indexOf(r.code) !== -1) {
+          closeForm(); setMsg('qResult', t + ' The list was reloaded.', true);
+          loadList('', { args: loaded ? loaded.args : qArgs(), keepScroll: y });
+          return;
+        }
+        res.textContent = t; res.className = 'meta report-error';
       });
     }
     apply.addEventListener('click', function () { submit('CORRECT'); });
     conf.addEventListener('click', function () { submit('CONFIRM'); });
     return form;
+  }
+  /** Export Excel: ALL matching rows (every page, current filters) - reuses the last complete load when the filters are unchanged, else loads again. */
+  function exportList() {
+    var a = qArgs(), err = rangeError(a);
+    if (err) { setMsg('qStatus', err, true); return; }
+    if (loaded && loaded.key === JSON.stringify(a)) { buildExport(rows, a); return; }
+    var seq = ++loadSeq; setBusy(true); setMsg('qStatus', 'Loading all records for the export…');
+    fetchAll(a, function (n, t, restart) { if (seq === loadSeq) setMsg('qStatus', restart ? 'The list changed - restarting (attempt ' + restart + ' of 3)…' : 'Loading ' + n + ' / ' + t + ' for the export…'); }).then(function (r) {
+      if (seq !== loadSeq) return;
+      setBusy(false);
+      if (!r.ok) { setMsg('qStatus', 'Excel not created: ' + r.error, true); return; }
+      adopt(r, a);
+      buildExport(rows, a);
+    });
+  }
+  function buildExport(list, a) {
+    if (!list.length) { setMsg('qStatus', 'Nothing to export: no records match these filters.', true); return; }
+    try {
+      var cols = [['Employee Code', 'string', 14], ['Employee Name', 'text', 26], ['Date', 'date', 13], ['Event / Area', 'text', 22], ['Zone', 'text', 18], ['Check-in', 'text', 17], ['Check-out', 'text', 17], ['Scheduled Shift', 'text', 18], ['Missing Punch', 'text', 16],
+        ['Zone Manager Approval Status', 'text', 20], ['Supervisor Correction Status', 'text', 20], ['State', 'text', 12], ['Issues', 'wrap', 34], ['Original Check-in', 'text', 17], ['Original Check-out', 'text', 17],
+        ['Zone Manager By', 'text', 20], ['Zone Manager At', 'text', 17], ['Correction By', 'text', 24], ['Correction At', 'text', 17], ['Correction Version', 'number', 11], ['Designation', 'text', 16], ['Location', 'text', 16]];
+      var out = list.map(function (c) {
+        var cr = c.correction;
+        return [String(c.employeeCode), c.employeeName, c.workDate, c.event, c.zone, c.checkIn || 'MISSING', c.checkOut || 'MISSING', shiftText(c) || 'No schedule', missText(c),
+          c.zmStatus, c.correctionStatus, c.listState, (c.issues || []).join(', '), (c.recorded && c.recorded.checkIn) || '', (c.recorded && c.recorded.checkOut) || '',
+          c.zmBy || '', c.zmAt || '', cr ? cr.by || '' : '', cr ? cr.at || '' : '', cr ? cr.version : '', c.designation || '', c.location || ''];
+      });
+      var bytes = window.HMGXlsx.build([{ name: 'Unmatched Records', columns: cols.map(function (c) { return { header: c[0], type: c[1], width: c[2] }; }), rows: out }]);
+      if (!(bytes && bytes.length > 100 && bytes[0] === 0x50 && bytes[1] === 0x4B)) { setMsg('qStatus', 'Excel not created: the workbook could not be built.', true); return; }
+      var name = 'HMG_Unmatched_Records_' + a.from + '_' + a.to + (a.state && a.state !== 'ALL' ? '_' + a.state : '') + '.xlsx';
+      var url = URL.createObjectURL(new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+      var box = $('qFiles'); clear(box);
+      var link = el('a', 'btn-secondary', 'Save ' + name + ' (' + Math.max(1, Math.round(bytes.length / 1024)) + ' KB)'); link.href = url; link.download = name; box.appendChild(link);
+      var auto = document.createElement('a'); auto.href = url; auto.download = name; auto.style.display = 'none'; document.body.appendChild(auto); auto.click(); auto.remove();
+      setMsg('qStatus', 'Excel ready: ' + name + ' (' + list.length + ' records). If no file appears, click the Save link.');
+    } catch (err) { setMsg('qStatus', 'Could not build the Excel file: ' + (err && err.message ? err.message : err), true); }
   }
 
   // ---------------- shift schedule ----------------
@@ -342,7 +505,7 @@
       var args = { action: action, codes: calls[i].codes, dates: calls[i].dates, start: s, end: e, requestId: newId(), confirm: true };
       if (action === 'SET') args.toleranceMin = tol;
       if (note) args.note = note;
-      op('svScheduleSave', args, dates[0], dates[dates.length - 1]).then(function (r) {
+      opWrite('svScheduleSave', args, dates[0], dates[dates.length - 1], function (n) { setMsg('aResult', 'Busy - retrying… (' + n + ' of 3)'); }).then(function (r) {
         if (!r.ok) { done('Stopped at step ' + (i + 1) + ' of ' + calls.length + ' - NOT saved: ' + (r.error || r.code) + '. Already done: ' + total.saved + ' saved, ' + total.withdrawn + ' withdrawn.', true); return; }
         ['saved', 'superseded', 'withdrawn', 'unchanged'].forEach(function (k) { total[k] += r[k] || 0; });
         i++; next();
@@ -393,7 +556,7 @@
     var a = iArgs();
     if (!window.confirm('Re-apply the LOST corrections of ' + a.from + ' to ' + a.to + ' exactly as approved?\nDuplicates and orphaned corrections are not touched; a record is never created.')) return;
     $('iReapply').disabled = true; setMsg('iStatus', 'Re-applying…');
-    op('svReapply', Object.assign({ confirm: true }, a), a.from, a.to).then(function (r) {
+    opWrite('svReapply', Object.assign({ confirm: true }, a), a.from, a.to, function (n) { setMsg('iStatus', 'Busy - retrying… (' + n + ' of 3)'); }).then(function (r) {
       $('iReapply').disabled = false;
       checkIntegrity((r.ok ? 'Re-applied ' : 'Partly re-applied ') + (r.reapplied || 0) + (r.failed ? ', FAILED ' + r.failed : '') + '.');
     });
@@ -401,7 +564,9 @@
 
   // ---------------- wiring ----------------
   ['queue', 'schedule', 'history'].forEach(function (t) { $('svTab' + t.charAt(0).toUpperCase() + t.slice(1)).addEventListener('click', function () { showTab(t); }); });
-  $('qLoad').addEventListener('click', function () { loadQueue(); });
+  $('qLoad').addEventListener('click', function () { loadList(); });
+  $('qExport').addEventListener('click', exportList);
+  $('qList').addEventListener('click', function (ev) { var t = ev.target; if (t && t.classList && t.classList.contains('sv-open')) openCorrection(+t.getAttribute('data-i')); });
   $('sLoad').addEventListener('click', function () { loadSchedule(); });
   $('sExport').addEventListener('click', exportExcel);
   $('hLoad').addEventListener('click', loadHistory);
