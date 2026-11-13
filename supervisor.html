@@ -6,7 +6,7 @@
 <meta name="referrer" content="no-referrer">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src https://hmg-write-bridge-poc.fieldmedicine1.workers.dev; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';">
 <title>HMG Attendance Supervisor</title>
-<link rel="stylesheet" href="style.css?v=20261113v11">
+<link rel="stylesheet" href="style.css?v=20261113v12">
 </head>
 <body>
 <div class="wrap analytics-wrap">
@@ -17,11 +17,12 @@
     <div id="svAccessDetail" class="meta" role="status"></div>
     <div id="svRoleBanner" class="notice" hidden></div>
     <div id="svScope" class="meta sv-scope"></div>
+    <div id="svDirectInfo" class="meta"></div>
   </div>
 
   <div id="svMain" hidden>
     <div class="sv-tabs" role="tablist">
-      <button type="button" class="btn-primary" id="svTabQueue" role="tab" data-tab="queue">Unmatched records / السجلات غير المطابقة</button>
+      <button type="button" class="btn-primary" id="svTabQueue" role="tab" data-tab="queue">Attendance records / سجلات الحضور</button>
       <button type="button" class="btn-secondary" id="svTabSchedule" role="tab" data-tab="schedule">Shift schedule / جدول الورديات</button>
       <button type="button" class="btn-secondary" id="svTabHistory" role="tab" data-tab="history">History / السجل</button>
     </div>
@@ -33,12 +34,17 @@
         <div class="filter-field"><label for="qZone">Zone / المنطقة</label><select id="qZone"><option value="">All</option></select></div>
         <div class="filter-field"><label for="qEvent">Event / Area</label><select id="qEvent"><option value="">All</option></select></div>
         <div class="filter-field"><label for="qCode">Employee code / الرمز</label><input type="text" id="qCode" autocomplete="off" dir="ltr"></div>
-        <div class="filter-field"><label for="qState">State / الحالة</label><select id="qState">
+        <div class="filter-field"><label for="qState">Status / الحالة</label><select id="qState">
           <option value="ALL">All / الكل</option>
+          <option value="MATCHED">Matched / مطابق</option>
+          <option value="UNMATCHED">Unmatched / غير مطابق</option>
+          <option value="MISSING_CHECK_IN">Missing check-in / ناقص الدخول</option>
+          <option value="MISSING_CHECK_OUT">Missing check-out / ناقص الخروج</option>
+          <option value="NOT_COMPUTABLE">No hours rule / بلا قاعدة ساعات</option>
           <option value="PENDING">Pending Zone Manager / بانتظار مدير المنطقة</option>
-          <option value="APPROVED">Approved (ready to correct) / معتمد</option>
-          <option value="CORRECTED">Corrected / تم التصحيح</option>
+          <option value="APPROVED">Approved / معتمد</option>
           <option value="REJECTED">Rejected / مرفوض</option>
+          <option value="CORRECTED">Corrected / تم التصحيح</option>
           <option value="FINAL">FINAL / نهائي</option></select></div>
         <div class="filter-field"><button id="qLoad" class="btn-primary" type="button">Load / تحميل</button></div>
         <div class="filter-field"><button id="qExport" class="btn-secondary" type="button">Export Excel / تصدير</button></div>
@@ -113,6 +119,6 @@
 <script src="net.js?v=20261112a"></script>
 <script src="access.js?v=20261112a"></script>
 <script src="xlsx.js?v=20261112a"></script>
-<script src="supervisor.js?v=20261113v11"></script>
+<script src="supervisor.js?v=20261113v12"></script>
 </body>
 </html>
