@@ -231,3 +231,24 @@ table.sv-table tr.sv-highlight.sv-selected > td { background-color: #fff3b0; }
 .sv-editor-keys { margin: 0; }
 .sv-admin-note { margin: 6px 0; font-size: 12px; font-weight: 600; color: #990000; }
 .sv-direct-notice { margin: 6px 0; font-size: 12px; padding: 3px 8px; background: #fff6e5; border: 1px solid #f0d38a; border-radius: 4px; color: #6b4d00; }
+
+/* V1.4 drafts + Save & Approve All */
+table.sv-table tr.sv-drafted > td { background: #eef7ee; box-shadow: inset 0 0 0 1px #8cc58c; }
+table.sv-table tr.sv-drafted[data-draft="CONFLICT"] > td, table.sv-table tr.sv-drafted[data-draft="FAILED"] > td, table.sv-table tr.sv-drafted[data-draft="REQUIRES_REVIEW"] > td, table.sv-table tr.sv-drafted[data-draft="NOT_CONFIRMED"] > td { background: #fff1f0; box-shadow: inset 0 0 0 1px #d98c85; }
+.sv-orig { text-decoration: line-through; color: #6b6e76; }
+.sv-prop { color: #14602b; }
+.sv-draft-tag { font-size: 11px; font-weight: 600; color: #14602b; }
+tr.sv-drafted .sv-draft-tag[data-status="CONFLICT"], tr.sv-drafted .sv-draft-tag[data-status="FAILED"], tr.sv-drafted .sv-draft-tag[data-status="REQUIRES_REVIEW"], tr.sv-drafted .sv-draft-tag[data-status="NOT_CONFIRMED"] { color: #990000; }
+.sv-pending.sv-has-drafts { border-color: #14602b; font-weight: 700; }
+.sv-saveall { font-size: 15px; font-weight: 700; padding: 8px 20px; }
+.sv-batch { display: flex; align-items: center; gap: 10px; margin: 6px 0; }
+.sv-batch progress { width: 320px; max-width: 60vw; height: 16px; }
+.sv-summary { font-weight: 700; }
+.sv-review { border: 2px solid #1c6bd6; border-radius: 6px; padding: 10px 12px; margin: 10px 0; background: #fbfdff; }
+.sv-review-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-bottom: 8px; }
+.sv-review-title { font-size: 16px; }
+.sv-review-table td { white-space: normal; vertical-align: top; }
+.sv-batch[hidden], .sv-review[hidden] { display: none; }
+.sv-draft-msg { font-size: 11px; color: #990000; max-width: 260px; white-space: normal; }
+.sv-review-table td.sv-rv-status[data-status="CONFLICT"], .sv-review-table td.sv-rv-status[data-status="FAILED"], .sv-review-table td.sv-rv-status[data-status="REQUIRES_REVIEW"], .sv-review-table td.sv-rv-status[data-status="NOT_CONFIRMED"] { color: #990000; font-weight: 600; }
+.sv-rv-actions button { margin: 2px 4px 2px 0; }
