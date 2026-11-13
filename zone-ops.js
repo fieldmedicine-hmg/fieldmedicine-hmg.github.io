@@ -1059,17 +1059,18 @@
     var host = $('zoSvTable'); clear(host);
     if (!svList.length) return;
     var t = el('table', 'data-table zo-sv-table'), hr = el('tr'), tb = el('tbody');
-    ['Email / البريد', 'Name', 'Scope / النطاق', 'State / الحالة', 'Designated', 'Last access', 'Actions / إجراءات'].forEach(function (h) { hr.appendChild(el('th', null, h)); });
+    ['Email / البريد', 'Name', 'Scope / النطاق', 'Direct approval / اعتماد مباشر', 'State / الحالة', 'Designated', 'Last access', 'Actions / إجراءات'].forEach(function (h) { hr.appendChild(el('th', null, h)); });
     var th = el('thead'); th.appendChild(hr); t.appendChild(th);
     svList.forEach(function (r) {
       var tr = el('tr'); tr.setAttribute('data-ref', r.ref); tr.setAttribute('data-state', r.state);
       var td = function (v, cls) { var c = el('td', cls, v === undefined || v === null || v === '' ? '—' : v); c.setAttribute('dir', 'auto'); tr.appendChild(c); return c; };
-      td(r.email || r.maskedEmail, 'sv-email'); td(r.name); td(svScopeText(r.scope), 'sv-scope-cell');
+      td(r.email || r.maskedEmail, 'sv-email'); td(r.name); td(svScopeText(r.scope), 'sv-scope-cell'); td(r.directApproval ? 'Yes / نعم' : 'No / لا', 'sv-direct-cell').setAttribute('data-direct', r.directApproval ? '1' : '0');
       var st = el('td'); st.appendChild(el('span', 'tag tag-' + (SV_STATE_TAG[r.state] || 'UNKNOWN'), r.state)); tr.appendChild(st);
       td(r.designatedAt); td(r.lastAccessed);
       var ac = el('td', 'zo-actions');
       function btn(act, label, disabled, why) { var b = el('button', 'btn-secondary zo-mini', label); b.type = 'button'; b.setAttribute('data-act', act); b.setAttribute('data-ref', r.ref); if (disabled) { b.disabled = true; b.title = why || ''; } ac.appendChild(b); }
       btn('edit', 'Edit zones / تعديل المناطق');
+      btn('direct', r.directApproval ? 'Remove direct approval / إلغاء الاعتماد المباشر' : 'Allow direct approval / السماح بالاعتماد المباشر', r.state === 'USER_INACTIVE', 'The user is inactive.');
       if (r.state === 'ACTIVE') btn('toggle', 'Deactivate / إيقاف'); else btn('toggle', 'Activate / تفعيل', r.state === 'REVOKED' || r.state === 'USER_INACTIVE', r.state === 'REVOKED' ? 'The link was revoked - issue a new link.' : 'The user is inactive.');
       btn('revoke', 'Revoke link / سحب الرابط', !r.hasLink, 'No link to revoke.');
       btn('link', 'Issue new link / رابط جديد', r.state === 'USER_INACTIVE', 'The user is inactive.');
@@ -1107,8 +1108,8 @@
   function svDesignate() {
     var email = $('zoSvEmail').value.trim(), sc = svScopeSel();
     if (!(sc === 'ALL' || sc.length)) return;
-    if (!window.confirm('Add ' + email + ' as an attendance supervisor?\nScope: ' + svScopeText(sc) + '.\nOther supervisors are NOT affected. A personal access link is issued (shown once).\nإضافة مشرف حضور - لا يتأثر المشرفون الآخرون.')) return;
-    svWrite('supervisorDesignate', { email: email, zones: sc, confirm: true }, '', function (r) { $('zoSvEmail').value = ''; svShowLink(r, email, 'Supervisor added'); svGates(); });
+    if (!window.confirm('Add ' + email + ' as an attendance supervisor?\nScope: ' + svScopeText(sc) + '.\nDirect approval (Pending / Rejected records without the Zone Manager): ' + ($('zoSvDirect').checked ? 'YES' : 'no') + '.\nOther supervisors are NOT affected. A personal access link is issued (shown once).\nإضافة مشرف حضور - لا يتأثر المشرفون الآخرون.')) return;
+    svWrite('supervisorDesignate', { email: email, zones: sc, directApproval: !!$('zoSvDirect').checked, confirm: true }, '', function (r) { $('zoSvDirect').checked = false; $('zoSvEmail').value = ''; svShowLink(r, email, 'Supervisor added'); svGates(); });
   }
   function svEdit(r) {
     var host = $('zoSvEdit'); clear(host);
@@ -1139,6 +1140,12 @@
     var r = svList.filter(function (x) { return x.ref === ref; })[0]; if (!r || busy) return;
     var who = r.email || r.maskedEmail;
     if (act === 'edit') { svEdit(r); return; }
+    if (act === 'direct') {
+      var onD = !r.directApproval, whoD = r.email || r.maskedEmail;
+      if (!window.confirm((onD ? 'ALLOW direct approval for ' : 'REMOVE direct approval from ') + whoD + '?\n' + (onD ? 'This supervisor may then correct and approve Pending / Rejected records without waiting for the Zone Manager (the Zone Manager decision stays unchanged).' : 'Pending / Rejected records become read-only for this supervisor again (immediately).') + '\nاعتماد مباشر')) return;
+      svWrite('supervisorUpdate', { ref: ref, directApproval: onD, confirm: true }, (onD ? 'Direct approval allowed: ' : 'Direct approval removed: ') + whoD + '.');
+      return;
+    }
     if (act === 'toggle') {
       var on = r.state !== 'ACTIVE';
       if (!window.confirm((on ? 'Activate ' : 'Deactivate ') + who + ' as attendance supervisor?\n' + (on ? 'Their existing link works again.' : 'Their link stops working until they are activated again.') + '\n' + (on ? 'تفعيل المشرف' : 'إيقاف المشرف مؤقتًا'))) return;
@@ -1153,7 +1160,7 @@
     if (act === 'link') {
       if (!r.email) { svNote('NOT done: the e-mail of this supervisor is not available.', true); return; }
       if (!window.confirm('Issue a NEW personal link for ' + who + ' (scope: ' + svScopeText(r.scope) + ')?\nThe previous link stops working at once; the supervisor is active again. The new link is shown once.\nإصدار رابط جديد؟')) return;
-      svWrite('supervisorDesignate', { email: r.email, zones: r.scope === 'ALL' ? 'ALL' : r.scope, confirm: true }, '', function (x) { svShowLink(x, r.email, 'New link issued'); });
+      svWrite('supervisorDesignate', { email: r.email, zones: r.scope === 'ALL' ? 'ALL' : r.scope, directApproval: !!r.directApproval, confirm: true }, '', function (x) { svShowLink(x, r.email, 'New link issued'); });
     }
   }
   function svRevokeAll() {

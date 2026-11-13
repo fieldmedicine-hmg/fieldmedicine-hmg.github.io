@@ -6,7 +6,7 @@
 <meta name="referrer" content="no-referrer">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://script.google.com https://script.googleusercontent.com; style-src 'self'; connect-src https://hmg-write-bridge-poc.fieldmedicine1.workers.dev; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';">
 <title>HMG Attendance Control Center</title>
-<link rel="stylesheet" href="style.css?v=20261113v11">
+<link rel="stylesheet" href="style.css?v=20261113v12">
 </head>
 <body>
 <div class="wrap analytics-wrap">
@@ -129,7 +129,7 @@
 
     <div class="zo-sub" id="zoSvSection">
       <div class="section-title">Attendance Supervisors / مشرفو الحضور</div>
-      <div class="meta">Several attendance supervisors can work at the same time (page: supervisor.html), each with all zones or only chosen zones, and each with a personal access link shown once. Adding a supervisor never removes the others. A supervisor corrects approved attendance times only; an administrator can intervene explicitly. Admin only.</div>
+      <div class="meta">Several attendance supervisors can work at the same time (page: supervisor.html), each with all zones or only chosen zones, and each with a personal access link shown once. Adding a supervisor never removes the others. A supervisor edits and approves attendance times from the Attendance records list. With "Direct approval" the supervisor may also correct records the Zone Manager has not approved yet (Pending / Rejected); the Zone Manager decision stays unchanged. An administrator can intervene explicitly. Admin only.</div>
       <div id="zoSvStatus" class="meta">Loading&hellip;</div>
       <div id="zoSvTable"></div>
       <div id="zoSvEdit"></div>
@@ -137,6 +137,7 @@
       <div class="filter-bar">
         <div class="filter-field zo-wide"><label for="zoSvEmail">Supervisor email / البريد الإلكتروني</label><input type="text" id="zoSvEmail" autocomplete="off" spellcheck="false" dir="ltr"></div>
         <div class="filter-field"><label><input type="radio" name="zoSvScope" id="zoSvScopeAll" checked> All zones / كل المناطق</label> <label><input type="radio" name="zoSvScope" id="zoSvScopeSome"> Only these zones / مناطق محددة</label></div>
+        <div class="filter-field"><label><input type="checkbox" id="zoSvDirect"> Direct approval / اعتماد مباشر</label></div>
         <div class="filter-field"><button id="zoSvDesignateBtn" class="btn-primary" type="button">Add supervisor</button></div>
         <div class="filter-field"><button id="zoSvRefreshBtn" class="btn-secondary" type="button">Refresh status</button></div>
         <div class="filter-field"><button id="zoSvRevokeAllBtn" class="btn-secondary" type="button">Revoke ALL links</button></div>
@@ -235,7 +236,7 @@
 <script src="xlsx.js?v=20261106c"></script>
 <script src="zone-ops-export.js?v=20261109a"></script>
 <script src="access.js?v=20261106c"></script>
-<script src="zone-ops.js?v=20261113v11"></script>
+<script src="zone-ops.js?v=20261113v12"></script>
 <script src="control.js?v=20261107b"></script>
 </body>
 </html>
