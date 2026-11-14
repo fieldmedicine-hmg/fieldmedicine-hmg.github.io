@@ -105,10 +105,9 @@
   // ---------------- attendance records (svList view ALL: every record in range, paged by listId + completeness check) ----------------
   var rows = [], counts = null, loaded = null /* {key, args} of the last COMPLETE load */, loadSeq = 0, openIdx = -1, selIdx = -1, idxByKey = {}, activeEditor = null;
   function store(k, v) { try { if (v === undefined) return window.localStorage.getItem(k); window.localStorage.setItem(k, v); } catch (e) { /* storage unavailable: session only */ } return null; }
-  var autoAdv = store('hmgSvAutoAdvance') !== '0', lastReason = store('hmgSvLastReason') || '';
-  function rememberReason(id) { lastReason = id || ''; store('hmgSvLastReason', lastReason); }
+  var autoAdv = store('hmgSvAutoAdvance') !== '0';
   // ---------------- V1.4 drafts (keyed by caseKey; memory + localStorage per signed-in identity) ----------------
-  var drafts = {}, DKEY = '', submitting = false, reviewOpen = false;
+  var drafts = {}, DKEY = '', submitting = false, reviewOpen = false, exporting = false;
   /** Drafts per svCorrectBatch request: 25 (the backend maximum); a smaller value is honoured on localhost only (tests). */
   var CHUNK = (function () { var n = 25; try { if (/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) { var m = /[?&]batchSize=(\d+)/.exec(location.search); if (m && +m[1] >= 1 && +m[1] <= 25) n = +m[1]; } } catch (e) { /* default */ } return n; })();
   var CONFLICT_MSG = 'Record changed - review. / تغير السجل - راجعه.', NOT_CONFIRMED_MSG = 'Not confirmed - submit again (safe: already-saved records are recognised). / لم يتم التأكد - أعد الإرسال (آمن).';
@@ -122,10 +121,9 @@
     try { var o = JSON.parse(raw); Object.keys(o || {}).forEach(function (k) { var d = o[k]; if (d && d.caseKey === k && d.proposed && d.item) drafts[k] = d; }); } catch (e) { drafts = {}; }
   }
   function sortedDraftKeys() { return draftKeys().sort(function (a, b) { var x = drafts[a], y = drafts[b]; return x.workDate < y.workDate ? -1 : x.workDate > y.workDate ? 1 : (x.employeeCode < y.employeeCode ? -1 : x.employeeCode > y.employeeCode ? 1 : 0); }); }
-  /** Quick-select reasons (the text sent as reason / evidence = the label + " - " + the note). "other" REQUIRES a note. */
-  var REASONS = [{ id: 'noOut', label: 'Forgot to punch out / نسي تسجيل الخروج' }, { id: 'noIn', label: 'Forgot to punch in / نسي تسجيل الدخول' }, { id: 'device', label: 'Device or network failure / عطل الجهاز أو الشبكة' },
-    { id: 'sheet', label: 'Shift sheet confirmed / تم التحقق من كشف الوردية' }, { id: 'gate', label: 'Gate / access log / سجل البوابة' }, { id: 'overtime', label: 'Approved overtime or extended event / عمل إضافي معتمد' },
-    { id: 'early', label: 'Approved early leave / انصراف مبكر معتمد' }, { id: 'other', label: 'Other - write a note / أخرى - اكتب ملاحظة' }];
+  /** V1.4.2: no reason is asked. The backend records the standardized type ADMINISTRATIVE_CORRECTION; the optional note travels as evidence. */
+  var ADMIN_TEXT = 'Administrative correction / تصحيح إداري';
+  function reasonShown(d) { return d.note || d.reasonText || ADMIN_TEXT; }
   var COLS = ['Actions / إجراءات', 'Employee Code / الرمز', 'Employee Name / الاسم', 'Date / التاريخ', 'Event / Area', 'Zone / المنطقة', 'Check-in / الدخول', 'Check-out / الخروج', 'Scheduled Shift / الوردية', 'Hours (actual / required) / الساعات', 'Match status / المطابقة', 'Missing Punch / الناقص', 'Zone Manager decision / قرار مدير المنطقة', 'Correction status / حالة التصحيح'];
   var RO_TEXT = { FINAL: 'FINAL - the zone day is closed. / اليوم نهائي', NO_DIRECT_PERMISSION: 'Needs Zone Manager approval - you have no direct-approval permission. / لا تملك صلاحية الاعتماد المباشر', NO_PUNCH: 'No real punch - cannot be edited. / لا توجد بصمة',
     AWAITING_ZONE_MANAGER: 'Waiting for the Zone Manager', ZM_REJECTED: 'Rejected by the Zone Manager', NOT_AVAILABLE: 'No longer available to you - press Load. / لم يعد متاحًا', REFRESH_FAILED: 'This record could not be refreshed - press Load. / تعذر تحديث السجل' };
@@ -133,7 +131,7 @@
     VERSION_CONFLICT: 'This record was changed by someone else. / تم تعديل السجل من شخص آخر.', ZONE_NOT_ALLOWED: 'This record belongs to a zone outside your access.',
     AWAITING_ZONE_MANAGER: 'The Zone Manager has not approved this record yet.', ZM_REJECTED: 'The Zone Manager rejected this record.', FINAL: 'The zone day is FINAL - it cannot be changed. / اليوم نهائي.',
     DIRECT_APPROVAL_NOT_ALLOWED: 'You do not have the direct-approval permission (ask the administrator). / لا تملك صلاحية الاعتماد المباشر.',
-    REASON_REQUIRED: 'A reason is required (at least 5 characters for a direct approval). / السبب مطلوب.', EVIDENCE_REQUIRED: 'Evidence is required when a time is set manually.',
+    REASON_REQUIRED: 'The reason carried by this old draft is too short (at least 5 characters for a direct approval) - remove the draft and edit the record again. / سبب المسودة قصير جدًا - احذفها وأعد التعديل.', EVIDENCE_REQUIRED: 'Evidence is required when a time is set manually.',
     NO_PUNCH_EVIDENCE: 'A record without any real punch cannot be corrected. / لا توجد بصمة فعلية.', NO_CHANGE: 'Nothing was changed. / لا يوجد تغيير.', NOT_ELIGIBLE: 'This record cannot be edited.',
     REQUEST_ID_CONFLICT: 'This request id was used by another user - try again (a new id is created).', NOT_AUTHORIZED: 'Your access is no longer valid.',
     ADMIN_OVERRIDE_REQUIRED: 'The administrator intervention flag was not accepted - reload the page.', APPLY_FAILED: 'The change could not be applied and was rolled back - try again.'
@@ -309,7 +307,7 @@
     tr0.insertAdjacentElement('afterend', fr); openIdx = i; selectRow(i, { noFocus: true });
     var holder = el('div', 'sv-case'); holder.setAttribute('data-case', c.caseKey); holder.setAttribute('data-path', c.editPath || ''); td.appendChild(holder);
     var dd = drafts[c.caseKey];
-    renderCase(holder, c, dd ? { reason: dd.reasonId, note: dd.note, in: dd.proposed.checkIn, out: dd.proposed.checkOut, next: dd.proposed.nextDay } : undefined, dd && dd.message ? dd.message : '');
+    renderCase(holder, c, dd ? { note: dd.note, in: dd.proposed.checkIn, out: dd.proposed.checkOut, next: dd.proposed.nextDay } : undefined, dd && dd.message ? dd.message : '');
     try { fr.scrollIntoView({ block: 'nearest' }); } catch (e) { /* ignore */ }
     if (activeEditor && activeEditor.focusFirst) activeEditor.focusFirst();
   }
@@ -352,24 +350,18 @@
     next.type = 'checkbox'; inSched.type = 'button'; outSched.type = 'button';
     inTime.className = 'sv-in-time sv-time'; outTime.className = 'sv-out-time sv-time'; next.className = 'sv-next';
     inTime.setAttribute('aria-label', 'Check-in time HH:mm'); outTime.setAttribute('aria-label', 'Check-out time HH:mm');
-    // the helpers and the next-day tick-box stay out of the Tab order: Tab goes check-in -> check-out -> reason -> note -> Save
+    // the helpers and the next-day tick-box stay out of the Tab order: Tab goes check-in -> check-out -> note -> Save
     next.tabIndex = -1; inSched.tabIndex = -1; outSched.tabIndex = -1;
     inTime.value = origIn; outTime.value = origOut; next.checked = origNext;
     if (preset && preset.in !== undefined) { inTime.value = preset.in; outTime.value = preset.out; next.checked = !!preset.next; }
     var fi = field('Check-in time / وقت الدخول', inTime); if (sh) fi.appendChild(inSched);
     var fo = field('Check-out time / وقت الخروج', outTime); if (sh) fo.appendChild(outSched);
     var nl = el('label', 'sv-next-label'); nl.appendChild(next); nl.appendChild(document.createTextNode(' Next day / اليوم التالي')); var fn = el('div', 'filter-field'); fn.appendChild(nl); form.appendChild(fn);
-    var rsel = el('select', 'sv-reason'), note = el('input', 'sv-note');
-    var ph = el('option', null, 'Choose a reason / اختر السبب'); ph.value = ''; rsel.appendChild(ph);
-    REASONS.forEach(function (r) { var o = el('option', null, r.label); o.value = r.id; rsel.appendChild(o); });
-    rsel.setAttribute('dir', 'auto'); rsel.setAttribute('aria-label', 'Reason');
-    note.type = 'text'; note.maxLength = 300; note.setAttribute('dir', 'auto'); note.autocomplete = 'off'; note.setAttribute('aria-label', 'Note');
-    var want = preset && preset.reason !== undefined ? preset.reason : lastReason;
-    rsel.value = REASONS.some(function (r) { return r.id === want; }) ? want : '';
+    var note = el('input', 'sv-note');
+    note.type = 'text'; note.maxLength = 300; note.setAttribute('dir', 'auto'); note.autocomplete = 'off'; note.setAttribute('aria-label', 'Note (optional)');
     note.value = preset && preset.note ? preset.note : '';
-    var noteLabel = el('label', null, 'Note / ملاحظة');
-    var nf = el('div', 'filter-field'); nf.appendChild(noteLabel); nf.appendChild(note);
-    field('Reason (required) / السبب', rsel); form.appendChild(nf);
+    var nf = el('div', 'filter-field'); nf.appendChild(el('label', null, 'Note (optional) / ملاحظة (اختيارية)')); nf.appendChild(note);
+    form.appendChild(nf);
     var preview = el('div', 'sv-preview'); preview.setAttribute('role', 'status');
     var save = el('button', 'btn-primary sv-save', 'Keep as draft & Next / حفظ كمسودة والتالي'), cancel = el('button', 'btn-secondary sv-cancel', 'Cancel / إلغاء');
     save.type = 'button'; cancel.type = 'button';
@@ -379,19 +371,18 @@
       rmv.addEventListener('click', function () { var i = idxByKey[c.caseKey]; removeDraft(c.caseKey); closeForm(); selectRow(i === undefined ? selIdx : i); });
     }
     var foot = el('div', 'sv-editor-foot'); foot.appendChild(preview); foot.appendChild(bf);
-    foot.appendChild(el('span', 'meta sv-editor-keys', 'Ctrl+Enter = Keep as draft & Next · Esc = Cancel · N = skip / تخطي'));
+    foot.appendChild(el('span', 'meta sv-editor-keys', 'Tab: check-in → check-out → note → Keep as draft · Ctrl+Enter = Keep as draft & Next · Esc = Cancel · N = skip / تخطي'));
     form.appendChild(foot);
     if (sg.basis) res.textContent = 'Suggestion: ' + sg.basis;
     var rq = requiredMin(c), working = false;
     function worked() { if (!validTime(inTime.value) || !validTime(outTime.value)) return null; return toMin(outTime.value) - toMin(inTime.value) + (next.checked ? 1440 : 0); }
-    function noteSync() { var other = rsel.value === 'other'; noteLabel.textContent = other ? 'Note (required, 5+ characters) / ملاحظة (مطلوبة)' : 'Note / ملاحظة'; note.classList.toggle('sv-note-required', other); }
     function sync() {
       var w = worked(), t;
       if (w === null) t = 'Worked hours: enter both times to see the result. / أدخل الوقتين لعرض الساعات.' + (rq !== null ? ' Required: ' + fmtMin(rq) + '.' : '');
       else if (w <= 0) t = 'Check-out is not after check-in - tick "Next day" for a shift that ends the next day. / الخروج قبل الدخول.';
       else t = 'Worked hours / الساعات: ' + fmtMin(w) + (rq !== null ? ' · Required: ' + fmtMin(rq) + ' · Variance: ' + (w - rq >= 0 ? '+' : '-') + fmtMin(Math.abs(w - rq)) : '');
       preview.textContent = t;
-      save.disabled = working; noteSync();
+      save.disabled = working;
     }
     function autoNext() { if (validTime(inTime.value) && validTime(outTime.value)) next.checked = toMin(outTime.value) < toMin(inTime.value); }
     [inTime, outTime].forEach(function (t) {
@@ -400,21 +391,19 @@
       t.addEventListener('blur', function () { var v = finishTime(t.value); if (v !== t.value) { t.value = v; autoNext(); sync(); } });
       t.addEventListener('focus', function () { try { t.select(); } catch (e) { /* ignore */ } });
     });
-    ['input', 'change'].forEach(function (ev) { next.addEventListener(ev, sync); rsel.addEventListener(ev, sync); });
+    ['input', 'change'].forEach(function (ev) { next.addEventListener(ev, sync); });
     inSched.addEventListener('click', function () { if (sh) { inTime.value = sh.start; autoNext(); sync(); } });
     outSched.addEventListener('click', function () { if (sh) { outTime.value = sh.end; next.checked = !!(sh.endDate && sh.endDate !== c.workDate) || toMin(sh.end) <= toMin(sh.start); sync(); } });
     cancel.addEventListener('click', function () { var i = idxByKey[c.caseKey]; closeForm(); selectRow(i === undefined ? selIdx : i); });
     sync();
     /** SET + time for each changed punch, KEEP for each unchanged one (an unchanged punch of an active correction that differs from the recorded punch is re-sent as SET so the correction keeps it), CONFIRM when nothing changed and no correction exists. */
     function build() {
-      var err = '', changedIn = inTime.value !== origIn, changedOut = outTime.value !== origOut || (!!outTime.value && next.checked !== origNext), rs = '';
-      var rr = REASONS.filter(function (r) { return r.id === rsel.value; })[0], nt = note.value.trim();
-      if (!rr) err = 'Choose a reason. / اختر السبب.';
-      else if (rr.id === 'other' && nt.length < 5) err = 'Write a note of at least 5 characters for "Other". / اكتب ملاحظة (5 أحرف على الأقل).';
-      else rs = rr.label + (nt ? ' - ' + nt : '');
-      var p = { caseKey: c.caseKey, expectedVersion: c.version, expectedStamp: c.rowStamp, reason: rs }; // one svCorrectBatch item (requestId is added when it is sent; adminOverride travels on the batch request)
+      var err = '', changedIn = inTime.value !== origIn, changedOut = outTime.value !== origOut || (!!outTime.value && next.checked !== origNext);
+      var nt = note.value.trim();
+      var p = { caseKey: c.caseKey, expectedVersion: c.version, expectedStamp: c.rowStamp }; // one svCorrectBatch item (requestId is added when it is sent; adminOverride travels on the batch request); no reason: the backend records ADMINISTRATIVE_CORRECTION
+      if (nt) p.evidence = nt; // the optional note is the evidence; without a note the backend defaults the evidence to the standardized type
       if (direct) p.directApproval = true;
-      if (!err && ((changedIn && !validTime(inTime.value)) || (changedOut && !validTime(outTime.value)))) err = 'Enter a valid HH:mm time (a recorded punch cannot be cleared). / أدخل وقتًا صحيحًا.';
+      if ((changedIn && !validTime(inTime.value)) || (changedOut && !validTime(outTime.value))) err = 'Enter a valid HH:mm time (a recorded punch cannot be cleared). / أدخل وقتًا صحيحًا.';
       if (err) return { err: err };
       var keepOrSet = function (cur, rcd, orig, isOut) {
         if (!cur || !c.correction || cur === rcd) return { mode: 'KEEP' };
@@ -425,13 +414,12 @@
         p.checkIn = changedIn ? { mode: 'SET', time: inTime.value } : keepOrSet(c.checkIn, rec.checkIn, origIn, false);
         p.checkOut = changedOut ? { mode: 'SET', time: outTime.value, nextDay: next.checked } : keepOrSet(c.checkOut, rec.checkOut, origOut, true);
         if (p.checkIn.mode === 'KEEP' && !c.checkIn && p.checkOut.mode === 'KEEP') return { err: 'Enter the missing punch time. / أدخل وقت البصمة الناقصة.' };
-        if (p.checkIn.mode === 'SET' || p.checkOut.mode === 'SET') p.evidence = rs; // evidence = the reason text (every predefined label is >= 5 characters)
-        return { p: p, reasonId: rr.id, changedIn: changedIn, changedOut: changedOut };
+        return { p: p, changedIn: changedIn, changedOut: changedOut };
       }
       if (missing.length) return { err: 'A punch is missing: enter its time. / أدخل وقت البصمة الناقصة.' };
       if (c.correction) return { err: 'Nothing changed - edit a time first. / لم يتغير شيء.' };
       p.action = 'CONFIRM'; p.checkIn = { mode: 'KEEP' }; p.checkOut = { mode: 'KEEP', nextDay: false };
-      return { p: p, reasonId: rr.id, changedIn: false, changedOut: false };
+      return { p: p, changedIn: false, changedOut: false };
     }
     /** Validates locally and keeps the draft; NOTHING is sent. Auto-advances like V1.3 (Edit -> Next -> Edit -> Next). */
     function submit() {
@@ -440,9 +428,9 @@
       var old = drafts[c.caseKey];
       drafts[c.caseKey] = { caseKey: c.caseKey, workDate: c.workDate, zone: c.zone || '', employeeCode: String(c.employeeCode), employeeName: c.employeeName || '', expectedVersion: c.version, expectedStamp: c.rowStamp, editPath: c.editPath || '',
         recorded: { checkIn: rec.checkIn || '', checkOut: rec.checkOut || '' }, current: { checkIn: c.checkIn || '', checkOut: c.checkOut || '' }, origMin: c.hours && has(c.hours.actualMin) ? c.hours.actualMin : null,
-        proposed: { checkIn: inTime.value, checkOut: outTime.value, nextDay: next.checked }, changedIn: b.changedIn, changedOut: b.changedOut, propMin: worked(), reasonId: b.reasonId, note: note.value.trim(), reasonText: b.p.reason, action: b.p.action, item: b.p,
+        proposed: { checkIn: inTime.value, checkOut: outTime.value, nextDay: next.checked }, changedIn: b.changedIn, changedOut: b.changedOut, propMin: worked(), reasonId: '', note: note.value.trim(), reasonText: b.p.reason || '', action: b.p.action, item: b.p,
         status: 'DRAFT', message: '', requestId: old ? old.requestId : '', reqSig: old ? old.reqSig : '', newId: old ? !!old.newId : false, at: Date.now() };
-      persist(); rememberReason(b.reasonId);
+      persist();
       var i = idxByKey[c.caseKey];
       closeForm();
       setMsg('qResult', 'Draft kept: ' + c.employeeCode + ' · ' + c.workDate + ' · In ' + (inTime.value || '—') + ' · Out ' + (outTime.value || '—') + ' (' + draftKeys().length + ' pending). Nothing is sent until "Save & Approve All". / حُفظت كمسودة.', false);
@@ -533,7 +521,7 @@
     punches.push('Out ' + (d.changedOut ? (tm(d.current.checkOut, d.workDate) || 'MISSING') + ' → ' : '') + (draftOut(d) || 'MISSING'));
     var hrs = (has(d.origMin) ? fmtMin(d.origMin) : '—') + ' → ' + (has(d.propMin) ? fmtMin(d.propMin) : '—');
     cell(d.employeeName, 'sv-rv-name'); cell(d.employeeCode, 'sv-rv-code'); cell(d.workDate, 'sv-rv-date'); cell(d.zone, 'sv-rv-zone'); cell(punches.join(' · '), 'sv-rv-punches'); cell(hrs, 'sv-rv-hours');
-    cell(d.reasonText, 'sv-rv-reason'); cell(d.editPath === 'DIRECT_APPROVAL' ? 'Direct approval / اعتماد مباشر' : 'ZM gate / بوابة مدير المنطقة', 'sv-rv-path');
+    cell(reasonShown(d), 'sv-rv-reason'); cell(d.editPath === 'DIRECT_APPROVAL' ? 'Direct approval / اعتماد مباشر' : 'ZM gate / بوابة مدير المنطقة', 'sv-rv-path');
     var st = cell((DRAFT_LABEL[d.status] || d.status) + (d.message ? ' - ' + d.message : ''), 'sv-rv-status'); st.setAttribute('data-status', d.status);
     var act = el('td', 'sv-rv-actions'), ed = el('button', 'btn-secondary sv-rv-edit', 'Edit / تعديل'), rm = el('button', 'btn-secondary sv-rv-remove', 'Remove / حذف');
     ed.type = 'button'; rm.type = 'button'; ed.disabled = submitting; rm.disabled = submitting;
@@ -586,8 +574,8 @@
     var r = [], at = {}, c = [], ok = true;
     var idx = function (t) { if (t === undefined || t === null || t === '') return -1; t = String(t); if (at[t] === undefined) { at[t] = r.length; r.push(t); } return at[t]; };
     items.forEach(function (it) {
-      var a = it.action === 'CONFIRM' ? 1 : it.action === 'CORRECT' ? 0 : -1, ci = specCode(it.checkIn), co = specCode(it.checkOut), h = hashes[it.caseKey], rs = idx(it.reason);
-      if (a < 0 || ci === null || co === null || !h || rs < 0) { ok = false; return; }
+      var a = it.action === 'CONFIRM' ? 1 : it.action === 'CORRECT' ? 0 : -1, ci = specCode(it.checkIn), co = specCode(it.checkOut), h = hashes[it.caseKey], rs = idx(it.reason); // V1.4.2: no reason = -1 (the backend default applies)
+      if (a < 0 || ci === null || co === null || !h) { ok = false; return; }
       c.push([it.caseKey, it.expectedVersion, h, it.requestId, a, ci, co, rs, idx(it.evidence), it.directApproval === true ? 1 : 0]);
     });
     if (!ok) return null;
@@ -627,6 +615,7 @@
   /** ONE button: every draft (except those flagged CONFLICT, which must be reviewed first) is sent in sequential svCorrectBatch requests. */
   function saveAll() {
     if (submitting) return;
+    if (exporting) { setMsg('qSummary', 'The corrected-data export is still loading - wait until it finishes, then save. / التصدير قيد التحميل.', true); return; }
     var all = draftKeys(), keys = all.filter(function (k) { return drafts[k].status !== 'CONFLICT'; });
     if (!keys.length) { setMsg('qSummary', all.length ? 'Only drafts with a conflict remain - open each one (Edit) to review it. / راجع التعارضات أولًا.' : 'No pending changes. / لا توجد تغييرات.', all.length > 0); return; }
     keys.sort(function (a, b) { var x = drafts[a], y = drafts[b]; return x.workDate < y.workDate ? -1 : x.workDate > y.workDate ? 1 : (x.employeeCode < y.employeeCode ? -1 : x.employeeCode > y.employeeCode ? 1 : 0); });
@@ -735,7 +724,7 @@
       buildExport(rows, a);
     });
   }
-  function draftText(d) { return d ? 'In ' + (d.proposed.checkIn || 'MISSING') + ' · Out ' + (draftOut(d) || 'MISSING') + ' · ' + d.reasonText + ' · ' + d.status + (d.message ? ' - ' + d.message : '') : ''; }
+  function draftText(d) { return d ? 'In ' + (d.proposed.checkIn || 'MISSING') + ' · Out ' + (draftOut(d) || 'MISSING') + ' · ' + reasonShown(d) + ' · ' + d.status + (d.message ? ' - ' + d.message : '') : ''; }
   function buildExport(list, a) {
     if (!list.length) { setMsg('qStatus', 'Nothing to export: no records match these filters.', true); return; }
     try {
@@ -757,6 +746,101 @@
       var auto = document.createElement('a'); auto.href = url; auto.download = name; auto.style.display = 'none'; document.body.appendChild(auto); auto.click(); auto.remove();
       setMsg('qStatus', 'Excel ready: ' + name + ' (' + list.length + ' records). If no file appears, click the Save link.');
     } catch (err) { setMsg('qStatus', 'Could not build the Excel file: ' + (err && err.message ? err.message : err), true); }
+  }
+
+  // ---------------- V1.4.2: Download Corrected Data (approved administrative times vs biometric punches; read-only, never reads drafts) ----------------
+  function pad2(n) { return ('0' + n).slice(-2); }
+  function hmText(m) { return has(m) && m !== '' && !isNaN(Number(m)) ? Math.floor(Number(m) / 60) + ':' + pad2(Math.round(Number(m)) % 60) : ''; }
+  function minBetween(a, b) {
+    var ra = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})/.exec(a || ''), rb = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})/.exec(b || '');
+    if (!ra || !rb) return null;
+    var x = Date.UTC(+ra[1], +ra[2] - 1, +ra[3], +ra[4], +ra[5]), y = Date.UTC(+rb[1], +rb[2] - 1, +rb[3], +rb[4], +rb[5]);
+    return y > x ? Math.round((y - x) / 60000) : null;
+  }
+  /** One svList record -> the facts the corrected-data workbook shows. The EFFECTIVE times are the active correction's approved times (else the Daily_Attendance times). */
+  function correctedFacts(c) {
+    var cr = c.correction || null, rec = c.recorded || {};
+    var effIn = cr ? (cr.approvedIn || '') : (c.checkIn || ''), effOut = cr ? (cr.approvedOut || '') : (c.checkOut || '');
+    var consistent = true, minutes = has(c.workedMinutes) && c.workedMinutes !== '' && !isNaN(Number(c.workedMinutes)) ? Number(c.workedMinutes) : '';
+    if (cr && ((c.checkIn || '') !== effIn || (c.checkOut || '') !== effOut)) { // a LOST correction: Daily_Attendance does not carry the approved times
+      consistent = false; var m = minBetween(effIn, effOut); minutes = m === null ? '' : m;
+    }
+    var type = cr ? (cr.type === 'CONFIRMED' ? 'CONFIRMED' : 'CORRECTED') : 'NONE';
+    var inAdmin = !!cr && type === 'CORRECTED' && !!cr.inBasis && cr.inBasis !== 'ACTUAL', outAdmin = !!cr && type === 'CORRECTED' && !!cr.outBasis && cr.outBasis !== 'ACTUAL';
+    return { cr: cr, type: type, effIn: effIn, effOut: effOut, minutes: minutes, consistent: consistent,
+      timeSource: type === 'CORRECTED' ? 'APPROVED CORRECTION (administrative)' : type === 'CONFIRMED' ? 'BIOMETRIC (confirmed by supervisor)' : 'BIOMETRIC',
+      inSource: !effIn ? 'MISSING' : inAdmin ? 'APPROVED (administrative)' : 'BIOMETRIC', outSource: !effOut ? 'MISSING' : outAdmin ? 'APPROVED (administrative)' : 'BIOMETRIC',
+      bioIn: rec.checkIn || 'MISSING', bioOut: rec.checkOut || 'MISSING' };
+  }
+  function sortRecords(list) {
+    return list.slice().sort(function (a, b) {
+      return a.workDate < b.workDate ? -1 : a.workDate > b.workDate ? 1 : (a.zone || '') < (b.zone || '') ? -1 : (a.zone || '') > (b.zone || '') ? 1 :
+        String(a.employeeCode) < String(b.employeeCode) ? -1 : String(a.employeeCode) > String(b.employeeCode) ? 1 : 0;
+    });
+  }
+  /** -> {sheets, counts}. withAudit adds the Attendance_Corrections sheet (the layout of the offline monthly report loader). */
+  function correctedWorkbook(list, a, withAudit, nDrafts) {
+    var recs = sortRecords(list), nCorr = 0, nConf = 0, nNone = 0, nLost = 0, skipped = 0;
+    var cols = [['Employee Code', 'string', 14], ['Employee Name', 'text', 26], ['Designation', 'text', 16], ['Event / Area', 'text', 22], ['Zone', 'text', 18], ['Location', 'text', 16], ['Date', 'date', 13], ['Scheduled Shift', 'text', 18],
+      ['Effective Check-in', 'string', 18], ['Effective Check-out', 'string', 18], ['Worked Hours (H:MM)', 'string', 12], ['Worked Hours (decimal)', 'number', 12], ['Worked Minutes', 'number', 12], ['Required Hours', 'string', 12],
+      ['Time Source', 'text', 34], ['Check-in Source', 'text', 24], ['Check-out Source', 'text', 24], ['Biometric Check-in', 'string', 18], ['Biometric Check-out', 'string', 18],
+      ['Correction Status', 'text', 16], ['Correction Version', 'number', 11], ['Approval Path', 'text', 20], ['Correction Approved At', 'string', 18], ['Zone Manager Decision', 'text', 18], ['Match Status', 'text', 18], ['Consistency', 'text', 32]];
+    var auditRows = [];
+    var rows = recs.map(function (c) {
+      var f = correctedFacts(c), rq = requiredMin(c), cr = f.cr;
+      if (f.type === 'CORRECTED') nCorr++; else if (f.type === 'CONFIRMED') nConf++; else nNone++;
+      if (!f.consistent) nLost++;
+      if (cr) {
+        if (f.effIn && f.effOut) auditRows.push([cr.correctionId || '', c.workDate, String(c.employeeCode), c.employeeName, c.designation || '', f.type, f.effIn, f.effOut, 'ACTIVE', cr.version,
+          c.zone || '', c.event || '', f.bioIn, f.bioOut, cr.inBasis || '', cr.outBasis || '', cr.reason || '', cr.approvalPath || '', cr.supervisor || cr.by || '', cr.appliedAt || cr.at || '', c.zmStatus || '']);
+        else skipped++;
+      }
+      return [String(c.employeeCode), c.employeeName, c.designation || '', c.event, c.zone, c.location || '', c.workDate, shiftText(c) || 'No schedule', f.effIn || 'MISSING', f.effOut || 'MISSING',
+        hmText(f.minutes), f.minutes === '' ? '' : Math.round(f.minutes / 60 * 100) / 100, f.minutes, rq !== null ? hmText(rq) : '', f.timeSource, f.inSource, f.outSource, f.bioIn, f.bioOut,
+        c.correctionStatus === 'CONFIRMED' || c.correctionStatus === 'CORRECTED' ? c.correctionStatus : 'NONE', cr ? cr.version : '', cr ? cr.approvalPath || '' : '', cr ? cr.appliedAt || cr.at || '' : '', c.zmStatus || '', c.matchStatus || '',
+        f.consistent ? 'OK' : 'MISMATCH - run integrity check'];
+    });
+    var sheets = [{ name: 'Corrected Attendance', columns: cols.map(function (x) { return { header: x[0], type: x[1], width: x[2] }; }), rows: rows }];
+    if (withAudit) {
+      var ac = [['Correction ID', 'text', 18], ['Work Date', 'date', 13], ['Employee Code', 'string', 14], ['Employee Name', 'text', 26], ['Designation', 'text', 16], ['Correction Type', 'text', 16], ['Approved Check-in', 'string', 18], ['Approved Check-out', 'string', 18],
+        ['Status', 'text', 10], ['Version', 'number', 9], ['Zone', 'text', 18], ['Event / Area', 'text', 22], ['Biometric Check-in (original)', 'string', 18], ['Biometric Check-out (original)', 'string', 18], ['Check-in Basis', 'text', 14], ['Check-out Basis', 'text', 14],
+        ['Reason', 'text', 30], ['Approval Path', 'text', 20], ['Supervisor', 'text', 24], ['Applied At', 'string', 18], ['Zone Manager Decision', 'text', 18]];
+      sheets.push({ name: 'Attendance_Corrections', columns: ac.map(function (x) { return { header: x[0], type: x[1], width: x[2] }; }), rows: auditRows });
+    }
+    var st = A.state() || {}, info = [['Generated at', new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC'], ['Signed in as', st.signedInAs || (who && who.signedInAs) || ''], ['Date range', a.from + ' to ' + a.to],
+      ['Total records', recs.length], ['Corrected records (administrative approved times)', nCorr], ['Confirmed records (biometric confirmed by supervisor)', nConf], ['Uncorrected records (biometric)', nNone],
+      ['Records whose Daily_Attendance row does not carry the approved times', nLost], ['Unsaved drafts', 'NOT included' + (nDrafts ? ' (' + nDrafts + ' unsaved draft' + (nDrafts === 1 ? '' : 's') + ' were not exported)' : '')],
+      ['Source', 'live system - latest saved state'], ['Audit history', 'complete history stays in the system (History tab)'],
+      ['Audit sheet', withAudit ? 'Attendance_Corrections (same columns as the monthly report loader) included' : 'not included']];
+    if (skipped) info.push(['Corrections left out of the audit sheet (no approved times)', skipped]);
+    sheets.push({ name: 'Export Info', columns: [{ header: 'Item', type: 'text', width: 52 }, { header: 'Value', type: 'text', width: 70 }], rows: info });
+    return { sheets: sheets, counts: { total: recs.length, corrected: nCorr, confirmed: nConf, uncorrected: nNone, lost: nLost, audit: auditRows.length } };
+  }
+  function downloadBytes(bytes, name) {
+    var url = URL.createObjectURL(new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    var box = $('qFiles'); clear(box);
+    var link = el('a', 'btn-secondary', 'Save ' + name + ' (' + Math.max(1, Math.round(bytes.length / 1024)) + ' KB)'); link.href = url; link.download = name; box.appendChild(link);
+    var auto = document.createElement('a'); auto.href = url; auto.download = name; auto.style.display = 'none'; document.body.appendChild(auto); auto.click(); auto.remove();
+  }
+  function downloadCorrected() {
+    if (submitting) { setMsg('qStatus', 'Saving is in progress - the export would miss the records being saved. Wait until Save & Approve All finishes, then download again. / جارٍ الحفظ، انتظر انتهاءه ثم أعد التحميل.', true); return; }
+    if (exporting) return;
+    var a = { from: $('qFrom').value, to: $('qTo').value, view: 'ALL', status: 'ALL' }, err = rangeError(a); // the zone / event / code / status filters are ignored (the backend still limits to your scope)
+    if (err) { setMsg('qStatus', err, true); return; }
+    var withAudit = $('qAudit').checked, nDrafts = draftKeys().length, note = nDrafts ? ' ' + nDrafts + ' unsaved draft' + (nDrafts === 1 ? '' : 's') + ' ' + (nDrafts === 1 ? 'is' : 'are') + ' NOT included (only saved, approved corrections are exported). / المسودات غير المحفوظة غير مشمولة.' : '';
+    exporting = true; $('qCorrected').disabled = true; setMsg('qStatus', 'Loading every record of ' + a.from + ' to ' + a.to + ' for the corrected-data export…' + note);
+    fetchAll(a, function (n, t, restart) { setMsg('qStatus', (restart ? 'The list changed - restarting (attempt ' + restart + ' of 3)…' : 'Loading ' + n + ' / ' + t + ' for the corrected-data export…') + note); }).then(function (r) {
+      exporting = false; $('qCorrected').disabled = false;
+      if (!r.ok) { setMsg('qStatus', 'Corrected data NOT created: ' + r.error, true); return; }
+      if (!r.rows.length) { setMsg('qStatus', 'Nothing to export: there are no attendance records in this date range.' + note, true); return; }
+      try {
+        var wb = correctedWorkbook(r.rows, a, withAudit, nDrafts), bytes = window.HMGXlsx.build(wb.sheets);
+        if (!(bytes && bytes.length > 100 && bytes[0] === 0x50 && bytes[1] === 0x4B)) { setMsg('qStatus', 'Corrected data NOT created: the workbook could not be built.', true); return; }
+        var name = 'HMG_Corrected_Attendance_' + a.from + '_' + a.to + '.xlsx';
+        downloadBytes(bytes, name);
+        setMsg('qStatus', 'Corrected data ready: ' + name + ' (' + wb.counts.total + ' records: ' + wb.counts.corrected + ' corrected, ' + wb.counts.confirmed + ' confirmed, ' + wb.counts.uncorrected + ' uncorrected' + (withAudit ? '; audit sheet included' : '') + '). If no file appears, click the Save link.' + note);
+      } catch (e) { setMsg('qStatus', 'Corrected data NOT created: ' + (e && e.message ? e.message : e), true); }
+    });
   }
 
   // ---------------- shift schedule ----------------
@@ -925,6 +1009,7 @@
   ['queue', 'schedule', 'history'].forEach(function (t) { $('svTab' + t.charAt(0).toUpperCase() + t.slice(1)).addEventListener('click', function () { showTab(t); }); });
   $('qLoad').addEventListener('click', function () { loadList(); });
   $('qExport').addEventListener('click', exportList);
+  $('qCorrected').addEventListener('click', downloadCorrected);
   $('qList').addEventListener('click', function (ev) { var t = ev.target; if (t && t.classList && t.classList.contains('sv-open') && !t.disabled) openCorrection(+t.getAttribute('data-i')); });
   $('qAuto').checked = autoAdv;
   $('qAuto').addEventListener('change', function () { autoAdv = $('qAuto').checked; store('hmgSvAutoAdvance', autoAdv ? '1' : '0'); });

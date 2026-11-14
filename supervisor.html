@@ -6,7 +6,7 @@
 <meta name="referrer" content="no-referrer">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src https://hmg-write-bridge-poc.fieldmedicine1.workers.dev; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';">
 <title>HMG Attendance Supervisor</title>
-<link rel="stylesheet" href="style.css?v=20261113v14">
+<link rel="stylesheet" href="style.css?v=20261114v142">
 </head>
 <body>
 <div class="wrap analytics-wrap">
@@ -48,11 +48,13 @@
           <option value="FINAL">FINAL / نهائي</option></select></div>
         <div class="filter-field"><button id="qLoad" class="btn-primary" type="button">Load / تحميل</button></div>
         <div class="filter-field"><button id="qExport" class="btn-secondary" type="button">Export Excel / تصدير</button></div>
+        <div class="filter-field sv-download-box"><button id="qCorrected" class="btn-primary sv-download" type="button">Download Corrected Data / تحميل البيانات المعدلة</button>
+          <label class="sv-auto-label sv-audit-label"><input type="checkbox" id="qAudit" checked> Include audit sheet / تضمين ورقة التدقيق</label></div>
         <div class="filter-field checkbox"><label class="sv-auto-label"><input type="checkbox" id="qAuto" checked> Auto-advance / الانتقال التلقائي</label></div>
         <div class="filter-field"><button id="qPending" class="btn-secondary sv-pending" type="button">Pending changes (0) / تغييرات معلقة</button></div>
         <div class="filter-field"><button id="qSaveAll" class="btn-primary sv-saveall" type="button" disabled>Save &amp; Approve All / حفظ واعتماد الكل</button></div>
       </div>
-      <div id="qKeys" class="meta sv-keys">Keyboard / لوحة المفاتيح: <b>&darr; &uarr;</b> or <b>J K</b> select a row &middot; <b>Enter</b> or <b>E</b> edit &middot; <b>Tab</b> check-in &rarr; check-out &rarr; reason &rarr; note &rarr; Keep as draft &middot; <b>Ctrl+Enter</b> (or Enter in Reason / Note) keep as draft &amp; next &middot; <b>Esc</b> cancel &middot; <b>N</b> skip to the next record</div>
+      <div id="qKeys" class="meta sv-keys">Keyboard / لوحة المفاتيح: <b>&darr; &uarr;</b> or <b>J K</b> select a row &middot; <b>Enter</b> or <b>E</b> edit &middot; <b>Tab</b> check-in &rarr; check-out &rarr; note &rarr; Keep as draft &middot; <b>Ctrl+Enter</b> (or Enter in the Note) keep as draft &amp; next &middot; no reason is needed - an administrative correction is recorded automatically &middot; <b>Esc</b> cancel &middot; <b>N</b> skip to the next record</div>
       <div id="qStatus" class="meta" role="status"></div>
       <div id="qResult" class="meta" role="status" aria-live="polite"></div>
       <div id="qBatch" class="sv-batch" hidden><progress id="qBatchBar" max="1" value="0"></progress> <span id="qBatchText" class="meta" role="status" aria-live="polite"></span></div>
@@ -126,6 +128,6 @@
 <script src="net.js?v=20261112a"></script>
 <script src="access.js?v=20261112a"></script>
 <script src="xlsx.js?v=20261112a"></script>
-<script src="supervisor.js?v=20261113v14b"></script>
+<script src="supervisor.js?v=20261114v142"></script>
 </body>
 </html>
