@@ -253,3 +253,17 @@ tr.sv-drafted .sv-draft-tag[data-status="CONFLICT"], tr.sv-drafted .sv-draft-tag
 .sv-draft-msg { font-size: 11px; color: #990000; max-width: 260px; white-space: normal; }
 .sv-review-table td.sv-rv-status[data-status="CONFLICT"], .sv-review-table td.sv-rv-status[data-status="FAILED"], .sv-review-table td.sv-rv-status[data-status="REQUIRES_REVIEW"], .sv-review-table td.sv-rv-status[data-status="NOT_CONFIRMED"] { color: #990000; font-weight: 600; }
 .sv-rv-actions button { margin: 2px 4px 2px 0; }
+
+/* V1.5 supervisor: refresh text, event/shift panel, source-conflict notice, attendance tags, WhatsApp box */
+.sv-updated { margin-left: 6px; }
+.sv-evpanel { margin: 8px 0; padding: 8px 10px; border: 1px solid #c9d3e0; border-radius: 4px; background: #f5f8fc; }
+.sv-evpanel .sv-ev-title { font-weight: 700; margin-bottom: 4px; }
+.sv-evpanel select { max-width: 100%; margin: 4px 0; }
+.sv-shift-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; }
+.sv-shift-pick.sv-shift-on { outline: 2px solid #1a1a1a; }
+.sv-time-undefined { color: #8a4b00; font-weight: 600; }
+.sv-source-conflict { margin: 8px 0; padding: 8px 10px; border: 1px solid #e0a0a0; border-radius: 4px; background: #fdeeee; color: #6b1a1a; }
+.sv-source-conflict button { margin-top: 6px; }
+.tag-att-MATCH { background: #e3f4e6; color: #1d6b2a; }
+.tag-att-CHECK_IN_ONLY, .tag-att-CHECK_OUT_ONLY { background: #fff3d6; color: #7a5200; }
+.sv-wa-text { width: 100%; box-sizing: border-box; font-family: inherit; margin: 6px 0; }

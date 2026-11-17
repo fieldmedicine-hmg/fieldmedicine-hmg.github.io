@@ -6,7 +6,7 @@
 <meta name="referrer" content="no-referrer">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src https://hmg-write-bridge-poc.fieldmedicine1.workers.dev; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';">
 <title>HMG Attendance Supervisor</title>
-<link rel="stylesheet" href="style.css?v=20261114v142">
+<link rel="stylesheet" href="style.css?v=20261117v15">
 </head>
 <body>
 <div class="wrap analytics-wrap">
@@ -45,14 +45,39 @@
           <option value="APPROVED">Approved / معتمد</option>
           <option value="REJECTED">Rejected / مرفوض</option>
           <option value="CORRECTED">Corrected / تم التصحيح</option>
-          <option value="FINAL">FINAL / نهائي</option></select></div>
+          <option value="FINAL">FINAL / نهائي</option>
+          <option value="MATCH">MATCH (complete attendance) / حضور مكتمل</option>
+          <option value="CHECK_IN_ONLY">Check-in Only / دخول فقط</option>
+          <option value="CHECK_OUT_ONLY">Check-out Only / خروج فقط</option>
+          <option value="SOURCE_CONFLICT">Source conflict / تعارض مصدر</option></select></div>
         <div class="filter-field"><button id="qLoad" class="btn-primary" type="button">Load / تحميل</button></div>
+        <div class="filter-field"><button id="qRefresh" class="btn-secondary" type="button">Refresh Data / تحديث البيانات</button> <span id="qUpdated" class="meta sv-updated" role="status"></span></div>
         <div class="filter-field"><button id="qExport" class="btn-secondary" type="button">Export Excel / تصدير</button></div>
+        <div class="filter-field sv-download-box"><button id="qExpMissing" class="btn-secondary" type="button">Export Missing Punches / تصدير البصمات الناقصة</button>
+          <label class="sv-auto-label"><input type="checkbox" id="qExpPerZone"> One file per zone / ملف لكل منطقة</label></div>
+        <div class="filter-field"><button id="qExpComplete" class="btn-secondary" type="button">Export Complete Attendance / تصدير الحضور المكتمل</button></div>
+        <div class="filter-field"><button id="qWaOpen" class="btn-secondary" type="button">Generate WhatsApp Message / رسالة واتساب</button></div>
         <div class="filter-field sv-download-box"><button id="qCorrected" class="btn-primary sv-download" type="button">Download Corrected Data / تحميل البيانات المعدلة</button>
           <label class="sv-auto-label sv-audit-label"><input type="checkbox" id="qAudit" checked> Include audit sheet / تضمين ورقة التدقيق</label></div>
         <div class="filter-field checkbox"><label class="sv-auto-label"><input type="checkbox" id="qAuto" checked> Auto-advance / الانتقال التلقائي</label></div>
         <div class="filter-field"><button id="qPending" class="btn-secondary sv-pending" type="button">Pending changes (0) / تغييرات معلقة</button></div>
         <div class="filter-field"><button id="qSaveAll" class="btn-primary sv-saveall" type="button" disabled>Save &amp; Approve All / حفظ واعتماد الكل</button></div>
+      </div>
+      <div id="qWa" class="control-card sv-wa" hidden>
+        <div class="group-title">WhatsApp message - missing punches / رسالة واتساب - البصمات الناقصة</div>
+        <div class="filter-bar">
+          <div class="filter-field"><label for="waDate">Date / التاريخ</label><input type="date" id="waDate"></div>
+          <div class="filter-field"><label for="waZone">Zone / المنطقة</label><select id="waZone"></select></div>
+          <div class="filter-field"><button id="waGen" class="btn-primary" type="button">Generate / إنشاء</button></div>
+        </div>
+        <div id="waStatus" class="meta" role="status"></div>
+        <textarea id="waText" class="sv-wa-text" rows="10" readonly dir="auto" aria-label="WhatsApp message"></textarea>
+        <div class="row-actions">
+          <button id="waCopy" class="btn-secondary" type="button" disabled>Copy / نسخ</button>
+          <button id="waShare" class="btn-primary" type="button" disabled>Share via WhatsApp / مشاركة عبر واتساب</button>
+          <button id="waClose" class="btn-secondary" type="button">Close / إغلاق</button>
+        </div>
+        <div class="meta">Nothing is sent automatically: the WhatsApp link opens only when you press Share. / لا يُرسل شيء تلقائيًا.</div>
       </div>
       <div id="qKeys" class="meta sv-keys">Keyboard / لوحة المفاتيح: <b>&darr; &uarr;</b> or <b>J K</b> select a row &middot; <b>Enter</b> or <b>E</b> edit &middot; <b>Tab</b> check-in &rarr; check-out &rarr; note &rarr; Keep as draft &middot; <b>Ctrl+Enter</b> (or Enter in the Note) keep as draft &amp; next &middot; no reason is needed - an administrative correction is recorded automatically &middot; <b>Esc</b> cancel &middot; <b>N</b> skip to the next record</div>
       <div id="qStatus" class="meta" role="status"></div>
@@ -128,6 +153,8 @@
 <script src="net.js?v=20261112a"></script>
 <script src="access.js?v=20261112a"></script>
 <script src="xlsx.js?v=20261112a"></script>
-<script src="supervisor.js?v=20261114v142"></script>
+<script src="hmg-events.js?v=20261117v15"></script>
+<script src="supervisor-reports.js?v=20261117v15"></script>
+<script src="supervisor.js?v=20261117v15"></script>
 </body>
 </html>

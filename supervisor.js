@@ -1,3 +1,4 @@
+// V1.5 (2026-11-17) additions: Refresh Data, event/shift panel (catalog suggestions, Confirm event), Case E source-conflict notice (Resolve = acceptSource), operational attendance status, Export Missing Punches / Complete Attendance (supervisor-reports.js), WhatsApp message.
 // Attendance Supervisor page V1.4 (2026-11-13, batch editing): ALL attendance records (svList view ALL, paged by listId + completeness check), an Edit button on every row (FIRST column) opening an inline editor.
 // The editor NEVER sends anything: its primary action keeps a DRAFT and moves to the next record (auto-advance + keyboard). Drafts live in memory + localStorage (per signed-in identity), are shown on the rows and in a
 // review panel, and are sent by ONE "Save & Approve All" (svCorrectBatch, compact encoding packed by encoded size <= 3,800 bytes and <= 25 per request, sequential, idempotent requestIds, per-draft results, in-place row patch). Direct supervisor approval when permitted. Shift schedule, history.
@@ -97,7 +98,7 @@
       }
       op('svWhoAmI', {}).then(function (r) {
         if (!r.ok) { $('svAccessDetail').textContent = 'You are not an attendance supervisor: ' + (r.error || r.code || ''); $('svMain').hidden = true; return; }
-        who = r; DKEY = 'hmgSvDrafts:' + identity(); loadDrafts(); applyRole(); updateToolbar(); loadList();
+        who = r; DKEY = 'hmgSvDrafts:' + identity(); loadDrafts(); applyRole(); updateToolbar(); loadList(); loadCatalog();
       });
     });
   }
@@ -108,6 +109,10 @@
   var autoAdv = store('hmgSvAutoAdvance') !== '0';
   // ---------------- V1.4 drafts (keyed by caseKey; memory + localStorage per signed-in identity) ----------------
   var drafts = {}, DKEY = '', submitting = false, reviewOpen = false, exporting = false;
+  // ---------------- V1.5 state ----------------
+  var catalog = null /* svEventCatalog answer (null = not loaded yet) */, catalogLoading = false, opBusy = false /* a V1.5 export / WhatsApp fetch is running */, knownZones = [];
+  var SVR = window.SVReports;
+  function attOf(c) { return SVR.attendanceOf(c); }
   /** Drafts per svCorrectBatch request: 25 (the backend maximum); a smaller value is honoured on localhost only (tests). */
   var CHUNK = (function () { var n = 25; try { if (/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) { var m = /[?&]batchSize=(\d+)/.exec(location.search); if (m && +m[1] >= 1 && +m[1] <= 25) n = +m[1]; } } catch (e) { /* default */ } return n; })();
   var CONFLICT_MSG = 'Record changed - review. / تغير السجل - راجعه.', NOT_CONFIRMED_MSG = 'Not confirmed - submit again (safe: already-saved records are recognised). / لم يتم التأكد - أعد الإرسال (آمن).';
@@ -123,7 +128,7 @@
   function sortedDraftKeys() { return draftKeys().sort(function (a, b) { var x = drafts[a], y = drafts[b]; return x.workDate < y.workDate ? -1 : x.workDate > y.workDate ? 1 : (x.employeeCode < y.employeeCode ? -1 : x.employeeCode > y.employeeCode ? 1 : 0); }); }
   /** V1.4.2: no reason is asked. The backend records the standardized type ADMINISTRATIVE_CORRECTION; the optional note travels as evidence. */
   var ADMIN_TEXT = 'Administrative correction / تصحيح إداري';
-  function reasonShown(d) { return d.note || d.reasonText || ADMIN_TEXT; }
+  function reasonShown(d) { return (d.acceptSource ? 'Source conflict resolved / حل تعارض المصدر' + (d.note ? ' · ' : '') : '') + (d.note || (d.acceptSource ? '' : (d.reasonText || ADMIN_TEXT))); }
   var COLS = ['Actions / إجراءات', 'Employee Code / الرمز', 'Employee Name / الاسم', 'Date / التاريخ', 'Event / Area', 'Zone / المنطقة', 'Check-in / الدخول', 'Check-out / الخروج', 'Scheduled Shift / الوردية', 'Hours (actual / required) / الساعات', 'Match status / المطابقة', 'Missing Punch / الناقص', 'Zone Manager decision / قرار مدير المنطقة', 'Correction status / حالة التصحيح'];
   var RO_TEXT = { FINAL: 'FINAL - the zone day is closed. / اليوم نهائي', NO_DIRECT_PERMISSION: 'Needs Zone Manager approval - you have no direct-approval permission. / لا تملك صلاحية الاعتماد المباشر', NO_PUNCH: 'No real punch - cannot be edited. / لا توجد بصمة',
     AWAITING_ZONE_MANAGER: 'Waiting for the Zone Manager', ZM_REJECTED: 'Rejected by the Zone Manager', NOT_AVAILABLE: 'No longer available to you - press Load. / لم يعد متاحًا', REFRESH_FAILED: 'This record could not be refreshed - press Load. / تعذر تحديث السجل' };
@@ -197,11 +202,13 @@
     }
     return attempt(1);
   }
-  function setBusy(b) { $('qLoad').disabled = b; $('qExport').disabled = b; }
+  function setBusy(b) { ['qLoad', 'qExport', 'qRefresh', 'qExpMissing', 'qExpComplete', 'waGen'].forEach(function (id) { var x = $(id); if (x) x.disabled = b; }); }
   function adopt(r, a) {
     rows = r.rows; counts = r.first.counts || {}; loaded = { key: JSON.stringify(a), args: a }; openIdx = -1; selIdx = -1; activeEditor = null; idxByKey = {}; rows.forEach(function (c, i) { idxByKey[c.caseKey] = i; });
     setOptions($('qZone'), r.first.zones); setOptions($('qEvent'), r.first.events);
     $('qZone').value = a.zone || ''; $('qEvent').value = a.event || '';
+    knownZones = (r.first.zones || []).slice();
+    var nowD = new Date(); $('qUpdated').textContent = 'Last updated / آخر تحديث: ' + ('0' + nowD.getHours()).slice(-2) + ':' + ('0' + nowD.getMinutes()).slice(-2) + ':' + ('0' + nowD.getSeconds()).slice(-2);
     reconcileDrafts(); renderCounts(); renderTable(); updateToolbar();
   }
   /** opts: args (filters to use), keepResult (keep the result line), focus (caseKey to scroll to + highlight after the load). */
@@ -222,6 +229,7 @@
       adopt(r, a);
       setMsg('qStatus', (note ? note + ' ' : '') + 'All ' + rows.length + ' of ' + r.first.total + ' records loaded.' + (a.status !== 'ALL' ? ' (status filter: ' + a.status + ')' : ''));
       if (opts.focus) focusRow(opts.focus);
+      if (opts.after) opts.after();
     });
   }
   function focusRow(key) {
@@ -232,10 +240,11 @@
     try { hit.scrollIntoView({ block: 'center' }); } catch (e) { hit.scrollIntoView(); }
   }
   var COUNT_ITEMS = [['total', 'Total / الإجمالي'], ['matched', 'Matched / مطابق'], ['unmatched', 'Unmatched / غير مطابق'], ['missingIn', 'Missing check-in / ناقص الدخول'], ['missingOut', 'Missing check-out / ناقص الخروج'], ['notComputable', 'No hours rule / بلا قاعدة ساعات'],
-    ['pending', 'Pending ZM / بانتظار مدير المنطقة'], ['approved', 'Approved / معتمد'], ['rejected', 'Rejected / مرفوض'], ['corrected', 'Corrected / مصحح'], ['final', 'FINAL / نهائي']];
+    ['pending', 'Pending ZM / بانتظار مدير المنطقة'], ['approved', 'Approved / معتمد'], ['rejected', 'Rejected / مرفوض'], ['corrected', 'Corrected / مصحح'], ['final', 'FINAL / نهائي'],
+    ['match', 'MATCH / حضور مكتمل', 1], ['checkInOnly', 'Check-in Only / دخول فقط', 1], ['checkOutOnly', 'Check-out Only / خروج فقط', 1], ['sourceConflict', 'Source conflict / تعارض مصدر', 1]];
   function renderCounts() {
     var box = $('qCounts'), c = counts || {};
-    box.innerHTML = COUNT_ITEMS.map(function (it) { return '<span class="sv-count" data-k="' + it[0] + '"><b>' + esc(c[it[0]] || 0) + '</b> ' + esc(it[1]) + '</span>'; }).join('');
+    box.innerHTML = COUNT_ITEMS.filter(function (it) { return !it[2] || c[it[0]] !== undefined; }).map(function (it) { return '<span class="sv-count" data-k="' + it[0] + '"><b>' + esc(c[it[0]] || 0) + '</b> ' + esc(it[1]) + '</span>'; }).join('');
     box.hidden = false;
   }
   function hhmm(s) { return s ? String(s).slice(-5) : ''; }
@@ -254,6 +263,9 @@
   function punchCell(orig, prop, kind) { return prop === null || prop === undefined ? esc(orig) : '<span class="sv-orig">' + esc(orig) + '</span> &rarr; <span class="sv-prop sv-prop-' + kind + '">' + esc(prop || 'MISSING') + '</span>'; }
   function draftOut(d) { return (d.proposed.checkOut || '') + (d.proposed.checkOut && d.proposed.nextDay ? ' (+1d)' : ''); }
   function draftHours(c, d) { var rq = requiredMin(c); return has(d.propMin) ? fmtMin(d.propMin) + ' / ' + (rq !== null ? fmtMin(rq) : '—') : '—'; }
+  var ATT_TXT = { MATCH: 'MATCH', CHECK_IN_ONLY: 'Check-in Only', CHECK_OUT_ONLY: 'Check-out Only' };
+  /** V1.5: the operational attendance status (MATCH / Check-in Only / Check-out Only) + the Case E tag. */
+  function attCell(c) { var a = attOf(c); return (a ? '<span class="tag tag-att-' + esc(a) + '" data-attendance="' + esc(a) + '">' + esc(ATT_TXT[a]) + '</span> ' : '') + (c.sourceConflict ? '<span class="tag sv-conflict-tag" data-conflict="1">Source conflict / تعارض مصدر</span> ' : ''); }
   function rowHtml(c, i) {
     var cor = c.correction, can = canEditRow(c) && !c._pending, match = c.matchStatus || '', dr = drafts[c.caseKey];
     var corTxt = '<span class="tag tag-' + esc(c.listState) + '" data-state="' + esc(c.listState) + '">' + esc(c.listState) + '</span> ' + esc(c.correctionStatus === 'NONE' ? 'No correction' : c.correctionStatus + (cor ? ' v' + cor.version : ''));
@@ -267,9 +279,9 @@
     var cells = [act, esc(c.employeeCode), '<span dir="auto">' + esc(c.employeeName) + '</span>', esc(c.workDate), '<span dir="auto">' + esc(c.event) + '</span>', '<span dir="auto">' + esc(c.zone) + '</span>',
       punchCell(tm(c.checkIn, c.workDate) || 'MISSING', dr && dr.changedIn ? dr.proposed.checkIn : null, 'in'), punchCell(tm(c.checkOut, c.workDate) || 'MISSING', dr && dr.changedOut ? draftOut(dr) : null, 'out'), esc(shiftText(c) || 'No schedule'),
       dr && (dr.changedIn || dr.changedOut) && has(dr.propMin) ? '<span class="sv-orig">' + esc(hoursText(c) || '—') + '</span> &rarr; <span class="sv-prop sv-prop-hours">' + esc(draftHours(c, dr)) + '</span>' : esc(hoursText(c) || '—'),
-      match ? '<span class="tag tag-' + esc(match) + '">' + esc(match) + '</span>' : '—', esc(missText(c) || '—'),
+      attCell(c) + (match ? '<span class="tag tag-' + esc(match) + '">' + esc(match) + '</span>' : (attCell(c) ? '' : '—')), esc(missText(c) || '—'),
       '<span class="tag tag-' + esc(c.zmStatus) + '">' + esc(c.zmStatus) + '</span>' + (c.zmBy ? ' <span dir="auto">' + esc(c.zmBy) + '</span>' : ''), corTxt];
-    return '<tr tabindex="-1" class="sv-row' + (dr ? ' sv-drafted' : '') + (can ? '' : ' sv-ro') + (c._updated ? ' sv-highlight' : '') + (c._nomatch ? ' sv-nomatch' : '') + '" data-i="' + i + '" data-case="' + esc(c.caseKey) + '" data-state="' + esc(c.listState) + '" data-match="' + esc(match) + '" data-path="' + esc(c.editPath || '') + '"' + (dr ? ' data-draft="' + esc(dr.status) + '"' : '') + '><td>' + cells.join('</td><td>') + '</td></tr>';
+    return '<tr tabindex="-1" class="sv-row' + (dr ? ' sv-drafted' : '') + (can ? '' : ' sv-ro') + (c._updated ? ' sv-highlight' : '') + (c._nomatch ? ' sv-nomatch' : '') + '" data-i="' + i + '" data-case="' + esc(c.caseKey) + '" data-state="' + esc(c.listState) + '" data-match="' + esc(match) + '" data-attendance="' + esc(attOf(c)) + '" data-path="' + esc(c.editPath || '') + '"' + (dr ? ' data-draft="' + esc(dr.status) + '"' : '') + '><td>' + cells.join('</td><td>') + '</td></tr>';
   }
   function renderTable() {
     var host = $('qList');
@@ -297,7 +309,7 @@
   }
   function nextEditable(i) { for (var j = i + 1; j < rows.length; j++) if (canEditRow(rows[j]) && !rows[j]._pending) return j; return -1; }
   /** The inline editor opens right under the row (no navigation) with the keyboard focus in the first useful field. A second click on Edit closes it (force = open anyway). */
-  function openCorrection(i, force) {
+  function openCorrection(i, force, presetOverride, msgOverride) {
     var wasOpen = openIdx === i; closeForm();
     if (wasOpen && !force) return;
     if (submitting) { setMsg('qResult', 'Saving is in progress - wait until it finishes. / جارٍ الحفظ.', false); return; }
@@ -307,7 +319,7 @@
     tr0.insertAdjacentElement('afterend', fr); openIdx = i; selectRow(i, { noFocus: true });
     var holder = el('div', 'sv-case'); holder.setAttribute('data-case', c.caseKey); holder.setAttribute('data-path', c.editPath || ''); td.appendChild(holder);
     var dd = drafts[c.caseKey];
-    renderCase(holder, c, dd ? { note: dd.note, in: dd.proposed.checkIn, out: dd.proposed.checkOut, next: dd.proposed.nextDay } : undefined, dd && dd.message ? dd.message : '');
+    renderCase(holder, c, presetOverride || (dd ? { note: dd.note, in: dd.proposed.checkIn, out: dd.proposed.checkOut, next: dd.proposed.nextDay } : undefined), msgOverride || (dd && dd.message ? dd.message : ''));
     try { fr.scrollIntoView({ block: 'nearest' }); } catch (e) { /* ignore */ }
     if (activeEditor && activeEditor.focusFirst) activeEditor.focusFirst();
   }
@@ -333,7 +345,10 @@
     if (c.editPath === 'DIRECT_APPROVAL') { var nt = el('div', 'sv-direct-notice', DIRECT_NOTICE); nt.setAttribute('dir', 'auto'); holder.appendChild(nt); }
     if (isAdmin()) { var an = el('div', 'sv-admin-note', ADMIN_NOTICE); an.setAttribute('dir', 'auto'); holder.appendChild(an); }
     var res = el('div', 'meta sv-res'); res.setAttribute('role', 'status'); res.setAttribute('aria-live', 'polite');
-    holder.appendChild(caseForm(holder, c, res, preset));
+    var formNode = caseForm(holder, c, res, preset);
+    var cn = sourceConflictNotice(c); if (cn) holder.appendChild(cn);
+    holder.appendChild(buildEventPanel(c, preset));
+    holder.appendChild(formNode);
     holder.appendChild(res);
     if (initialMsg) { res.textContent = initialMsg; res.className = 'meta sv-res report-error'; }
   }
@@ -360,6 +375,7 @@
     var note = el('input', 'sv-note');
     note.type = 'text'; note.maxLength = 300; note.setAttribute('dir', 'auto'); note.autocomplete = 'off'; note.setAttribute('aria-label', 'Note (optional)');
     note.value = preset && preset.note ? preset.note : '';
+    var init = { in: inTime.value, out: outTime.value, next: next.checked, note: note.value }; // V1.5: what the editor opened with (dirty check for Refresh)
     var nf = el('div', 'filter-field'); nf.appendChild(el('label', null, 'Note (optional) / ملاحظة (اختيارية)')); nf.appendChild(note);
     form.appendChild(nf);
     var preview = el('div', 'sv-preview'); preview.setAttribute('role', 'status');
@@ -397,12 +413,17 @@
     cancel.addEventListener('click', function () { var i = idxByKey[c.caseKey]; closeForm(); selectRow(i === undefined ? selIdx : i); });
     sync();
     /** SET + time for each changed punch, KEEP for each unchanged one (an unchanged punch of an active correction that differs from the recorded punch is re-sent as SET so the correction keeps it), CONFIRM when nothing changed and no correction exists. */
-    function build() {
+    function build(acceptSource) {
       var err = '', changedIn = inTime.value !== origIn, changedOut = outTime.value !== origOut || (!!outTime.value && next.checked !== origNext);
       var nt = note.value.trim();
       var p = { caseKey: c.caseKey, expectedVersion: c.version, expectedStamp: c.rowStamp }; // one svCorrectBatch item (requestId is added when it is sent; adminOverride travels on the batch request); no reason: the backend records ADMINISTRATIVE_CORRECTION
       if (nt) p.evidence = nt; // the optional note is the evidence; without a note the backend defaults the evidence to the standardized type
       if (direct) p.directApproval = true;
+      if (acceptSource) { // V1.5 Case E: the times in the fields become the approved times and the late real punch is accepted as the source
+        if (!validTime(inTime.value) || !validTime(outTime.value)) return { err: 'Enter both times (HH:mm) to resolve the source conflict. / أدخل الوقتين لحل التعارض.' };
+        p.action = 'CORRECT'; p.acceptSource = true; p.checkIn = { mode: 'SET', time: inTime.value }; p.checkOut = { mode: 'SET', time: outTime.value, nextDay: next.checked };
+        return { p: p, changedIn: true, changedOut: true };
+      }
       if ((changedIn && !validTime(inTime.value)) || (changedOut && !validTime(outTime.value))) err = 'Enter a valid HH:mm time (a recorded punch cannot be cleared). / أدخل وقتًا صحيحًا.';
       if (err) return { err: err };
       var keepOrSet = function (cur, rcd, orig, isOut) {
@@ -422,13 +443,13 @@
       return { p: p, changedIn: false, changedOut: false };
     }
     /** Validates locally and keeps the draft; NOTHING is sent. Auto-advances like V1.3 (Edit -> Next -> Edit -> Next). */
-    function submit() {
-      var b = build();
+    function submit(acc) {
+      var b = build(acc === true);
       if (b.err) { res.textContent = b.err; res.className = 'meta sv-res report-error'; return; }
       var old = drafts[c.caseKey];
       drafts[c.caseKey] = { caseKey: c.caseKey, workDate: c.workDate, zone: c.zone || '', employeeCode: String(c.employeeCode), employeeName: c.employeeName || '', expectedVersion: c.version, expectedStamp: c.rowStamp, editPath: c.editPath || '',
         recorded: { checkIn: rec.checkIn || '', checkOut: rec.checkOut || '' }, current: { checkIn: c.checkIn || '', checkOut: c.checkOut || '' }, origMin: c.hours && has(c.hours.actualMin) ? c.hours.actualMin : null,
-        proposed: { checkIn: inTime.value, checkOut: outTime.value, nextDay: next.checked }, changedIn: b.changedIn, changedOut: b.changedOut, propMin: worked(), reasonId: '', note: note.value.trim(), reasonText: b.p.reason || '', action: b.p.action, item: b.p,
+        proposed: { checkIn: inTime.value, checkOut: outTime.value, nextDay: next.checked }, changedIn: b.changedIn, changedOut: b.changedOut, propMin: worked(), reasonId: '', note: note.value.trim(), reasonText: b.p.reason || '', action: b.p.action, item: b.p, acceptSource: b.p.acceptSource === true,
         status: 'DRAFT', message: '', requestId: old ? old.requestId : '', reqSig: old ? old.reqSig : '', newId: old ? !!old.newId : false, at: Date.now() };
       persist();
       var i = idxByKey[c.caseKey];
@@ -445,21 +466,27 @@
       }
       selectRow(i);
     }
-    save.addEventListener('click', submit);
-    activeEditor = { holder: holder, submit: submit, cancel: function () { cancel.click(); },
+    save.addEventListener('click', function () { submit(false); });
+    activeEditor = { holder: holder, submit: function () { submit(false); }, cancel: function () { cancel.click(); }, resolve: function () { submit(true); },
+      fillIn: function (v) { inTime.value = v; autoNext(); sync(); }, // V1.5 shift buttons only FILL the field (never save)
+      fillOut: function (v, nd) { outTime.value = v; next.checked = !!nd; if (!nd) autoNext(); sync(); },
+      state: function () { var ev = activeEditor && activeEditor.evState || {}; return { caseKey: c.caseKey, version: c.version, stamp: c.rowStamp, eventId: ev.eventId || '', shiftId: ev.shiftId || '',
+        dirty: inTime.value !== init.in || outTime.value !== init.out || next.checked !== init.next || note.value !== init.note, preset: { in: inTime.value, out: outTime.value, next: next.checked, note: note.value } }; },
       focusFirst: function () { var f = !c.checkIn ? inTime : (!c.checkOut ? outTime : inTime); try { f.focus({ preventScroll: true }); f.select(); } catch (e) { /* ignore */ } } };
     return form;
   }
   // ---- in-place update after a save (no full list reload) ----
   var COUNT_OF_MATCH = { MATCHED: 'matched', UNMATCHED: 'unmatched', MISSING_CHECK_IN: 'missingIn', MISSING_CHECK_OUT: 'missingOut', NOT_COMPUTABLE: 'notComputable' };
-  function bucketsOf(c) { var b = ['total']; if (COUNT_OF_MATCH[c.matchStatus]) b.push(COUNT_OF_MATCH[c.matchStatus]); if (c.listState) b.push(String(c.listState).toLowerCase()); return b; }
+  var COUNT_OF_ATT = { MATCH: 'match', CHECK_IN_ONLY: 'checkInOnly', CHECK_OUT_ONLY: 'checkOutOnly' };
+  function bucketsOf(c) { var b = ['total']; if (COUNT_OF_MATCH[c.matchStatus]) b.push(COUNT_OF_MATCH[c.matchStatus]); if (c.listState) b.push(String(c.listState).toLowerCase()); if (COUNT_OF_ATT[attOf(c)]) b.push(COUNT_OF_ATT[attOf(c)]); if (c.sourceConflict) b.push('sourceConflict'); return b; }
   function adjustCounts(oldRow, newRow) {
     if (!counts) return;
-    bucketsOf(oldRow).forEach(function (k) { counts[k] = Math.max(0, (counts[k] || 0) - 1); });
-    bucketsOf(newRow).forEach(function (k) { counts[k] = (counts[k] || 0) + 1; });
+    var v15 = { match: 1, checkInOnly: 1, checkOutOnly: 1, sourceConflict: 1 }; // only when the backend reports them
+    bucketsOf(oldRow).forEach(function (k) { if (v15[k] && counts[k] === undefined) return; counts[k] = Math.max(0, (counts[k] || 0) - 1); });
+    bucketsOf(newRow).forEach(function (k) { if (v15[k] && counts[k] === undefined) return; counts[k] = (counts[k] || 0) + 1; });
     renderCounts();
   }
-  function matchesStatus(c, st) { return !st || st === 'ALL' || (COUNT_OF_MATCH[st] ? c.matchStatus === st : c.listState === st); }
+  function matchesStatus(c, st) { return !st || st === 'ALL' || (st === 'SOURCE_CONFLICT' ? !!c.sourceConflict : COUNT_OF_ATT[st] ? attOf(c) === st : COUNT_OF_MATCH[st] ? c.matchStatus === st : c.listState === st); }
   function makeRow(c, i) { var tb = document.createElement('tbody'); tb.innerHTML = rowHtml(c, i); return tb.firstChild; }
   function replaceRow(i, c2) {
     var old = rows[i], st = loaded && loaded.args ? loaded.args.status : 'ALL';
@@ -473,7 +500,7 @@
     var n = makeRow(rows[i], i); if (selIdx === i) n.classList.add('sv-selected'); tr0.replaceWith(n);
   }
   /** The row as a svCorrectBatch result describes it (times, hours, rowStamp and version come from the written row; the authoritative record follows from the next Load). */
-  function batchPatched(c, r) {
+  function batchPatched(c, r, acceptedSource) {
     var n = Object.assign({}, c), rw = r.row || {};
     if (rw.checkIn !== undefined) { n.checkIn = rw.checkIn || ''; n.current = Object.assign({}, c.current, { checkIn: n.checkIn }); }
     if (rw.checkOut !== undefined) { n.checkOut = rw.checkOut || ''; n.current = Object.assign({}, n.current || c.current, { checkOut: n.checkOut }); }
@@ -486,6 +513,13 @@
     n.listState = 'CORRECTED'; n.correctionStatus = r.state === 'CONFIRMED' ? 'CONFIRMED' : 'CORRECTED';
     n.correction = { correctionId: r.correctionId, version: r.version, type: r.type || (r.state === 'CONFIRMED' ? 'CONFIRMED' : 'CORRECTED'), approvedIn: n.checkIn, approvedOut: n.checkOut, by: '', at: '', approvalPath: r.approvalPath || (c.editPath === 'DIRECT_APPROVAL' ? 'SUPERVISOR_DIRECT' : 'ZM_GATE') };
     if (r.version !== undefined) n.version = r.version;
+    // V1.5: the operational status follows the saved times at once (the next Load is authoritative)
+    n.effective = { checkIn: n.checkIn || '', checkOut: n.checkOut || '' };
+    n.attendance = n.checkIn && n.checkOut ? 'MATCH' : (n.checkIn ? 'CHECK_IN_ONLY' : (n.checkOut ? 'CHECK_OUT_ONLY' : c.attendance));
+    var mm = minBetween(n.checkIn, n.checkOut); n.effectiveMinutes = n.attendance === 'MATCH' ? (mm !== null ? mm : (n.hours && has(n.hours.actualMin) ? n.hours.actualMin : null)) : null;
+    var lb = SVR.approvalLabelOf(c); if (lb === 'PENDING_ZONE_MANAGER' && n.correction.approvalPath === 'SUPERVISOR_DIRECT') lb = 'SUPERVISOR_APPROVED';
+    n.approvalLabel = lb; n.payable = n.attendance === 'MATCH' && lb === 'APPROVED';
+    if (acceptedSource) n.sourceConflict = null;
     return n;
   }
   // ---- drafts: counter, review panel, reconcile after a reload ----
@@ -576,7 +610,9 @@
     items.forEach(function (it) {
       var a = it.action === 'CONFIRM' ? 1 : it.action === 'CORRECT' ? 0 : -1, ci = specCode(it.checkIn), co = specCode(it.checkOut), h = hashes[it.caseKey], rs = idx(it.reason); // V1.4.2: no reason = -1 (the backend default applies)
       if (a < 0 || ci === null || co === null || !h) { ok = false; return; }
-      c.push([it.caseKey, it.expectedVersion, h, it.requestId, a, ci, co, rs, idx(it.evidence), it.directApproval === true ? 1 : 0]);
+      var ce = [it.caseKey, it.expectedVersion, h, it.requestId, a, ci, co, rs, idx(it.evidence), it.directApproval === true ? 1 : 0];
+      if (it.acceptSource === true) ce.push(1); // V1.5 Case E: optional 11th element a:1 = acceptSource (source conflict resolved)
+      c.push(ce);
     });
     if (!ok) return null;
     var out = Object.assign({}, base); out.r = r; out.c = c; return out;
@@ -615,6 +651,7 @@
   /** ONE button: every draft (except those flagged CONFLICT, which must be reviewed first) is sent in sequential svCorrectBatch requests. */
   function saveAll() {
     if (submitting) return;
+    if (opBusy) { setMsg('qSummary', 'An export / message is still loading - wait until it finishes, then save. / التحميل جارٍ.', true); return; }
     if (exporting) { setMsg('qSummary', 'The corrected-data export is still loading - wait until it finishes, then save. / التصدير قيد التحميل.', true); return; }
     var all = draftKeys(), keys = all.filter(function (k) { return drafts[k].status !== 'CONFLICT'; });
     if (!keys.length) { setMsg('qSummary', all.length ? 'Only drafts with a conflict remain - open each one (Edit) to review it. / راجع التعارضات أولًا.' : 'No pending changes. / لا توجد تغييرات.', all.length > 0); return; }
@@ -645,7 +682,7 @@
           if (!x) { mark(d, 'NOT_CONFIRMED', 'No answer for this record - submit again (safe). / لا توجد إجابة.'); tot.unconfirmed++; return; }
           if (x.status === 'SAVED') {
             if (r.verified !== true) { mark(d, 'NOT_CONFIRMED', 'Saved but the batch was not verified - submit again (safe). / لم يتم التحقق.'); tot.unconfirmed++; return; }
-            var i = idxByKey[k]; delete drafts[k]; if (i !== undefined) replaceRow(i, batchPatched(rows[i], x));
+            var i = idxByKey[k], acc = !!(d.item && d.item.acceptSource); delete drafts[k]; if (i !== undefined) replaceRow(i, batchPatched(rows[i], x, acc));
             tot.saved++; return;
           }
           var msg = 'NOT saved: ' + failText(x.code, x.error);
@@ -694,6 +731,7 @@
     if (activeEditor && k === 'Enter' && ctrl) { ev.preventDefault(); activeEditor.submit(); return; }
     if (activeEditor && k === 'Escape') { ev.preventDefault(); activeEditor.cancel(); return; }
     if (ctrl) return;
+    if (t.closest('.sv-evpanel') || t.closest('.sv-source-conflict')) return; // V1.5 panels keep their own Enter / click behaviour
     if (inEd) {
       var typing = t.classList && t.classList.contains('sv-note');
       if (k === 'Enter' && !ev.shiftKey && (t.tagName === 'SELECT' || typing)) { ev.preventDefault(); activeEditor.submit(); return; }
@@ -841,6 +879,206 @@
         setMsg('qStatus', 'Corrected data ready: ' + name + ' (' + wb.counts.total + ' records: ' + wb.counts.corrected + ' corrected, ' + wb.counts.confirmed + ' confirmed, ' + wb.counts.uncorrected + ' uncorrected' + (withAudit ? '; audit sheet included' : '') + '). If no file appears, click the Save link.' + note);
       } catch (e) { setMsg('qStatus', 'Corrected data NOT created: ' + (e && e.message ? e.message : e), true); }
     });
+  }
+
+  // ---------------- V1.5: event catalog, event / shift panel, Case E notice ----------------
+  /** svEventCatalog (read) - once per session, again on Refresh and after Confirm event. Never blocks the page: an older backend simply has no catalog. */
+  function loadCatalog(force) {
+    if (catalogLoading || (catalog && catalog.ok && !force)) return Promise.resolve();
+    catalogLoading = true;
+    var done = function (r) { catalogLoading = false; catalog = r && r.ok ? r : { ok: false, unavailable: true, events: [], error: r && (r.error || r.code) || '' }; if (activeEditor && activeEditor.refreshPanel) activeEditor.refreshPanel(); };
+    return op('svEventCatalog', {}).then(done, function () { done(null); });
+  }
+  function evShifts(ev) { return (ev && ev.shifts || []).filter(function (s) { return String(s.status || 'ACTIVE').toUpperCase() !== 'ARCHIVED' && /^\d{2}:\d{2}$/.test(String(s.start || '')); }); }
+  function evById(id) { var l = (catalog && catalog.events) || []; for (var i = 0; i < l.length; i++) if (l[i].eventId === id) return l[i]; return null; }
+  function sourceConflictNotice(c) {
+    var sc = c.sourceConflict; if (!sc) return null;
+    var box = el('div', 'sv-source-conflict'); box.setAttribute('role', 'alert'); box.setAttribute('dir', 'auto'); box.setAttribute('data-case-e', '1');
+    box.appendChild(el('b', null, 'Source conflict / تعارض المصدر'));
+    box.appendChild(el('div', null, 'A real punch arrived after the approved time was saved. The approved time is kept until you resolve it. / وصلت بصمة فعلية بعد حفظ الوقت المعتمد، ويبقى الوقت المعتمد حتى تحل التعارض.'));
+    var late = []; if (sc.lateCheckIn) late.push('Late check-in / الدخول المتأخر: ' + sc.lateCheckIn); if (sc.lateCheckOut) late.push('Late check-out / الخروج المتأخر: ' + sc.lateCheckOut);
+    box.appendChild(el('div', 'sv-sc-late', late.join(' · ') || 'Late punch time not available / وقت البصمة المتأخرة غير متاح'));
+    box.appendChild(el('div', 'sv-sc-kept', 'Approved time kept / الوقت المعتمد المحفوظ: In ' + (c.checkIn || 'MISSING') + ' · Out ' + (c.checkOut || 'MISSING')));
+    var b = el('button', 'btn-secondary sv-resolve', 'Resolve / حل التعارض'); b.type = 'button';
+    b.addEventListener('click', function () { if (activeEditor && activeEditor.resolve) activeEditor.resolve(); });
+    box.appendChild(b);
+    box.appendChild(el('div', 'meta', 'Resolve keeps the times in the fields below as the approved times and accepts the late punch as the source (sent with Save & Approve All). / يحفظ الأوقات الظاهرة كأوقات معتمدة ويقبل البصمة المتأخرة كمصدر.'));
+    return box;
+  }
+  /** The editor's event / shift panel: catalog suggestion, several candidates -> a select (never an automatic pick), the shifts of the chosen event, "Use shift start / end" (fills the field only), "Time not defined", Confirm event. */
+  function buildEventPanel(c, preset) {
+    var box = el('div', 'sv-evpanel'); box.setAttribute('data-case', c.caseKey);
+    var sel = { eventId: preset && preset.eventId || '', shiftId: preset && preset.shiftId || '' }, confirming = false;
+    var msg = el('div', 'meta sv-ev-msg'); msg.setAttribute('role', 'status'); msg.setAttribute('aria-live', 'polite');
+    function hooks() { return activeEditor || {}; }
+    function render() {
+      clear(box);
+      box.appendChild(el('div', 'sv-ev-title', 'Event & shift / الفعالية والوردية'));
+      box.appendChild(line('Employee / الموظف', c.employeeName + ' · #' + c.employeeCode + ' · ' + c.workDate + ' · ' + (c.zone || '')));
+      box.appendChild(line('Event in the record / الفعالية في السجل', c.event || 'MISSING'));
+      var eff = SVR.effectiveOf(c), att = attOf(c), mins = SVR.minutesOf(c);
+      var l1 = line('Attendance / الحضور', (ATT_TXT[att] || '—') + (missText(c) ? ' · Missing punch / الناقص: ' + missText(c) : '')); l1.classList.add('sv-ev-att'); box.appendChild(l1);
+      var l2 = line('Effective times / الأوقات السارية', 'In ' + (eff.checkIn || 'MISSING') + ' · Out ' + (eff.checkOut || 'MISSING') + (mins !== null ? ' · ' + fmtMin(mins) : '')); l2.classList.add('sv-ev-eff'); box.appendChild(l2);
+      var ev = null, cands = [];
+      if (!catalog) box.appendChild(el('div', 'meta sv-ev-note', 'Loading the event catalog… / جارٍ تحميل كتالوج الفعاليات'));
+      else if (catalog.unavailable || catalog.ok === false) box.appendChild(el('div', 'meta sv-ev-note', 'Event catalog not available - shifts cannot be suggested. / كتالوج الفعاليات غير متاح.'));
+      else {
+        cands = window.HMGEvents ? window.HMGEvents.suggest({ zone: c.zone, event: c.event, workDate: c.workDate }, catalog).candidates : [];
+        if (!cands.length) box.appendChild(el('div', 'meta sv-ev-note', 'No matching event in the catalog. / لا توجد فعالية مطابقة في الكتالوج.'));
+        else if (cands.length === 1) {
+          if (!sel.eventId) sel.eventId = cands[0].event.eventId;
+          box.appendChild(line('Suggested event / الفعالية المقترحة', cands[0].event.name + (cands[0].event.zone ? ' · ' + cands[0].event.zone : '') + ' (' + cands[0].why + ')'));
+        } else {
+          var lb = el('label', null, 'Several events match - choose one / عدة فعاليات مطابقة - اختر واحدة'), sl = el('select', 'sv-ev-select');
+          sl.setAttribute('aria-label', 'Event candidates');
+          var o0 = el('option', null, '— choose the event / اختر الفعالية —'); o0.value = ''; sl.appendChild(o0);
+          cands.forEach(function (x) { var o = el('option', null, x.event.name + (x.event.zone ? ' · ' + x.event.zone : '') + ' · ' + x.score + ' (' + x.why + ')'); o.value = x.event.eventId; sl.appendChild(o); });
+          sl.value = sel.eventId; if (sl.value !== sel.eventId) { sel.eventId = ''; sel.shiftId = ''; sl.value = ''; }
+          sl.addEventListener('change', function () { sel.eventId = sl.value; sel.shiftId = ''; render(); });
+          box.appendChild(lb); box.appendChild(sl);
+        }
+        ev = sel.eventId ? evById(sel.eventId) : null;
+        if (ev) {
+          box.appendChild(line('Selected event / الفعالية المختارة', ev.name + (ev.location ? ' · ' + ev.location : '') + (ev.dateFrom || ev.dateTo ? ' · ' + (ev.dateFrom || '…') + ' → ' + (ev.dateTo || '…') : '')));
+          var shs = evShifts(ev);
+          if (!shs.length || ev.timeDefined === false) { var nd = el('div', 'sv-time-undefined', 'Time not defined / الوقت غير محدد'); nd.setAttribute('data-time-defined', '0'); box.appendChild(nd); }
+          else {
+            if (!sel.shiftId && shs.length === 1) sel.shiftId = shs[0].shiftId;
+            var list = el('div', 'sv-shift-list'); list.setAttribute('role', 'group'); list.setAttribute('aria-label', 'Shifts');
+            shs.forEach(function (sh) {
+              var w = window.HMGEvents.shiftWindow(c.workDate, sh);
+              var b = el('button', 'btn-secondary sv-shift-pick' + (sel.shiftId === sh.shiftId ? ' sv-shift-on' : ''), (sh.name ? sh.name + ': ' : '') + sh.start + (sh.end ? ' - ' + sh.end + (w && w.crossesMidnight ? ' (+1d)' : '') : ' - ?'));
+              b.type = 'button'; b.setAttribute('data-shift', sh.shiftId); b.setAttribute('aria-pressed', sel.shiftId === sh.shiftId ? 'true' : 'false');
+              b.addEventListener('click', function () { sel.shiftId = sh.shiftId; render(); });
+              list.appendChild(b);
+            });
+            box.appendChild(list);
+            var chosen = null; shs.forEach(function (sh) { if (sh.shiftId === sel.shiftId) chosen = sh; });
+            if (chosen) {
+              var cw = window.HMGEvents.shiftWindow(c.workDate, chosen), us = el('button', 'btn-secondary sv-use-shift-start', 'Use shift start / وقت بداية الوردية'), ue = el('button', 'btn-secondary sv-use-shift-end', 'Use shift end / وقت نهاية الوردية');
+              us.type = 'button'; ue.type = 'button';
+              us.addEventListener('click', function () { if (hooks().fillIn) hooks().fillIn(chosen.start); });
+              if (chosen.end) ue.addEventListener('click', function () { if (hooks().fillOut) hooks().fillOut(chosen.end, cw && cw.crossesMidnight); });
+              else { ue.disabled = true; ue.title = 'End time not given / وقت النهاية غير محدد'; }
+              box.appendChild(us); box.appendChild(document.createTextNode(' ')); box.appendChild(ue);
+              box.appendChild(el('div', 'meta', 'The buttons only fill the time field - review it, then keep the draft. / الأزرار تملأ الحقل فقط.'));
+            }
+          }
+        } else if (cands.length > 1) box.appendChild(el('div', 'meta sv-ev-note', 'Choose the event to see its shifts. / اختر الفعالية لعرض ورديتها.'));
+        if (!cands.length) { var nd2 = el('div', 'sv-time-undefined', 'Time not defined / الوقت غير محدد'); nd2.setAttribute('data-time-defined', '0'); box.appendChild(nd2); }
+      }
+      var cf = el('button', 'btn-secondary sv-ev-confirm', 'Confirm event / تأكيد الفعالية'); cf.type = 'button';
+      cf.disabled = !ev || !c.event || confirming;
+      cf.addEventListener('click', function () {
+        if (confirming || !ev) return;
+        confirming = true; cf.disabled = true; msg.className = 'meta sv-ev-msg'; msg.textContent = 'Confirming…';
+        opWrite('svEventConfirm', { eventId: ev.eventId, alias: c.event || '', zone: c.zone || '', requestId: newId() }, c.workDate, c.workDate, function (n) { msg.textContent = 'Busy - retrying… (' + n + ' of 3)'; }).then(null, function () { return null; }).then(function (r) {
+          confirming = false;
+          if (!r || !r.ok) { render(); msg.className = 'meta sv-ev-msg report-error'; msg.textContent = 'NOT confirmed: ' + failText(r && r.code, r && r.error); return; }
+          loadCatalog(true);
+          render(); msg.className = 'meta sv-ev-msg zo-saved'; msg.textContent = r.duplicate ? 'Already confirmed for this event. / مؤكد مسبقًا.' : 'Event confirmed - "' + (c.event || '') + '" now suggests ' + ev.name + '. Attendance was not changed. / تم تأكيد الفعالية.';
+        });
+      });
+      box.appendChild(cf); box.appendChild(msg);
+    }
+    render();
+    if (activeEditor) { activeEditor.refreshPanel = render; activeEditor.evState = sel; }
+    return box;
+  }
+  /** Refresh Data: the SAME filters as the displayed list, a brand-new list (no listId is sent on the first page), drafts untouched (the reconcile logic flags changed records), the open editor reopened with its unsaved values. */
+  function refreshData() {
+    if ($('qRefresh').disabled || submitting || exporting || opBusy) return;
+    var a = loaded && loaded.args ? Object.assign({}, loaded.args) : qArgs();
+    var st = activeEditor && activeEditor.state ? activeEditor.state() : null, selKey = selIdx >= 0 && rows[selIdx] ? rows[selIdx].caseKey : (st ? st.caseKey : '');
+    loadCatalog(true);
+    loadList('Data refreshed.', { args: a, after: function () {
+      var i = selKey ? idxByKey[selKey] : undefined;
+      if (i !== undefined) selectRow(i, { noFocus: true });
+      if (!st || idxByKey[st.caseKey] === undefined) return;
+      var j = idxByKey[st.caseKey], c2 = rows[j], changed = String(c2.version) !== String(st.version) || String(c2.rowStamp) !== String(st.stamp);
+      if (!canEditRow(c2) || c2._pending) return;
+      var pr = st.dirty ? Object.assign({}, st.preset) : {};
+      pr.eventId = st.eventId; pr.shiftId = st.shiftId;
+      openCorrection(j, true, pr, changed && st.dirty ? 'The record changed on the server - your unsaved values were kept, review them before saving. / تغير السجل - احتُفظ بقيمك غير المحفوظة.' : '');
+    } });
+  }
+
+  // ---------------- V1.5: operational exports + WhatsApp (pure logic lives in supervisor-reports.js) ----------------
+  function scopeZones() { var z = who && who.scope && who.scope.zones; return z && z.length ? z : null; }
+  function exportArgs() { var a = { from: $('qFrom').value, to: $('qTo').value, view: 'ALL', status: 'ALL' }; if ($('qZone').value) a.zone = $('qZone').value; if ($('qEvent').value) a.event = $('qEvent').value; return a; }
+  function xlsxOk(bytes) { return !!(bytes && bytes.length > 100 && bytes[0] === 0x50 && bytes[1] === 0x4B); }
+  /** Several files: every one gets a Save link (browsers may ask before allowing a second automatic download). */
+  function downloadFiles(files) {
+    var box = $('qFiles'); clear(box);
+    files.forEach(function (f, i) {
+      var url = URL.createObjectURL(new Blob([f.bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+      var link = el('a', 'btn-secondary sv-file-link', 'Save ' + f.name + ' (' + Math.max(1, Math.round(f.bytes.length / 1024)) + ' KB)'); link.href = url; link.download = f.name; box.appendChild(link); box.appendChild(document.createTextNode(' '));
+      setTimeout(function () { var auto = document.createElement('a'); auto.href = url; auto.download = f.name; auto.style.display = 'none'; document.body.appendChild(auto); auto.click(); auto.remove(); }, i * 400);
+    });
+  }
+  function runOpsExport(kind) {
+    if (submitting) { setMsg('qStatus', 'Saving is in progress - wait until Save & Approve All finishes. / جارٍ الحفظ.', true); return; }
+    if (opBusy || exporting || $('qLoad').disabled) return;
+    var a = exportArgs(), err = rangeError(a); if (err) { setMsg('qStatus', err, true); return; }
+    var label = kind === 'missing' ? 'missing punches' : 'complete attendance';
+    opBusy = true; setBusy(true); setMsg('qStatus', 'Loading fresh records for the ' + label + ' export…');
+    fetchAll(a, function (n, t, restart) { setMsg('qStatus', restart ? 'The list changed - restarting (attempt ' + restart + ' of 3)…' : 'Loading ' + n + ' / ' + t + ' for the ' + label + ' export…'); }).then(function (r) {
+      opBusy = false; setBusy(false);
+      if (!r.ok) { setMsg('qStatus', 'Export NOT created: ' + r.error, true); return; }
+      try {
+        var range = { from: a.from, to: a.to }, files = [], info = '';
+        if (kind === 'missing') {
+          var sel = SVR.selectMissing(r.rows, { scopeZones: scopeZones() });
+          if (!sel.all.length && !sel.rejected.length && !sel.cross.length) { setMsg('qStatus', 'Nothing to export: there are no missing punches for these filters. / لا توجد بصمات ناقصة.', true); return; }
+          SVR.missingWorkbooks(sel, $('qExpPerZone').checked, range).forEach(function (wb) { files.push({ name: wb.name, bytes: window.HMGXlsx.build(wb.sheets) }); });
+          info = 'Missing punches ready: ' + sel.counts.missing + ' record(s) in ' + sel.counts.zones + ' zone(s) · ' + sel.counts.rejected + ' rejected · ' + sel.counts.cross + ' cross-zone pair(s) to review' + (files.length > 1 ? ' · ' + files.length + ' files' : '') + '.';
+        } else {
+          var cw = SVR.completeWorkbook(r.rows, scopeZones(), range);
+          if (!cw.count) { setMsg('qStatus', 'Nothing to export: there are no complete (MATCH) records for these filters. / لا توجد سجلات مكتملة.', true); return; }
+          files.push({ name: cw.name, bytes: window.HMGXlsx.build(cw.sheets) });
+          info = 'Complete attendance ready: ' + cw.count + ' MATCH record(s).';
+        }
+        if (!files.every(function (f) { return xlsxOk(f.bytes); })) { setMsg('qStatus', 'Export NOT created: the workbook could not be built.', true); return; }
+        downloadFiles(files);
+        setMsg('qStatus', info + ' If no file appears, click the Save link(s). / إذا لم يظهر ملف اضغط رابط الحفظ.');
+      } catch (e) { setMsg('qStatus', 'Export NOT created: ' + (e && e.message ? e.message : e), true); }
+    });
+  }
+  function waZones() { var sz = scopeZones(); return sz ? SVR.visibleZones(sz, sz) : knownZones.slice(); }
+  function openWa() {
+    var box = $('qWa'); box.hidden = !box.hidden; if (box.hidden) return;
+    if (!$('waDate').value) $('waDate').value = $('qTo').value || A.todayRiyadh();
+    var sel = $('waZone'), keep = sel.value, zs = waZones(); clear(sel);
+    var o0 = el('option', null, '— choose the zone / اختر المنطقة —'); o0.value = ''; sel.appendChild(o0);
+    zs.forEach(function (z) { var o = el('option', null, z); o.value = z; sel.appendChild(o); });
+    sel.value = keep && zs.indexOf(keep) !== -1 ? keep : (zs.length === 1 ? zs[0] : '');
+  }
+  function genWa() {
+    if (submitting) { setMsg('waStatus', 'Saving is in progress - wait until it finishes. / جارٍ الحفظ.', true); return; }
+    if (opBusy || exporting || $('qLoad').disabled) return;
+    var date = $('waDate').value, zone = $('waZone').value;
+    if (!date) { setMsg('waStatus', 'Choose the date. / اختر التاريخ.', true); return; }
+    if (!zone || waZones().indexOf(zone) === -1) { setMsg('waStatus', 'Choose one of your zones. / اختر منطقة.', true); return; }
+    opBusy = true; setBusy(true); setMsg('waStatus', 'Loading the current records…'); $('waCopy').disabled = true; $('waShare').disabled = true;
+    fetchAll({ from: date, to: date, view: 'ALL', status: 'ALL', zone: zone }, function (n, t) { setMsg('waStatus', 'Loading ' + n + ' / ' + t + '…'); }).then(function (r) {
+      opBusy = false; setBusy(false);
+      if (!r.ok) { setMsg('waStatus', 'Message NOT created: ' + r.error, true); return; }
+      var m = SVR.buildWhatsApp({ date: date, zone: zone, records: r.rows, scopeZones: scopeZones() });
+      $('waText').value = m.text; $('waCopy').disabled = false; $('waShare').disabled = false;
+      setMsg('waStatus', 'Message ready: ' + m.counts.total + ' missing punch(es) (' + m.counts.checkInOnly + ' check-in only, ' + m.counts.checkOutOnly + ' check-out only). Nothing was sent. / لم يُرسل شيء.');
+    });
+  }
+  function copyWa() {
+    var t = $('waText').value; if (!t) return;
+    var ok = function () { setMsg('waStatus', 'Copied to the clipboard. / تم النسخ.'); };
+    var fb = function () { try { $('waText').focus(); $('waText').select(); if (document.execCommand('copy')) { ok(); return; } } catch (e) { /* fall through */ } setMsg('waStatus', 'Could not copy automatically - select the text and copy it. / انسخ النص يدويًا.', true); };
+    try { if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(t).then(ok, fb); return; } } catch (e) { /* fall through */ }
+    fb();
+  }
+  function shareWa() {
+    var t = $('waText').value; if (!t) return;
+    var l = SVR.waLink(t); window.open(l.url, '_blank', 'noopener'); // opened ONLY here, on the user's click
+    setMsg('waStatus', 'WhatsApp opened in a new tab.' + (l.truncated ? ' The message was too long for the link and was shortened - use Copy for the full text. / الرسالة طويلة، استخدم النسخ.' : ''));
   }
 
   // ---------------- shift schedule ----------------
@@ -1010,6 +1248,11 @@
   $('qLoad').addEventListener('click', function () { loadList(); });
   $('qExport').addEventListener('click', exportList);
   $('qCorrected').addEventListener('click', downloadCorrected);
+  $('qRefresh').addEventListener('click', refreshData);
+  $('qExpMissing').addEventListener('click', function () { runOpsExport('missing'); });
+  $('qExpComplete').addEventListener('click', function () { runOpsExport('complete'); });
+  $('qWaOpen').addEventListener('click', openWa); $('waGen').addEventListener('click', genWa); $('waCopy').addEventListener('click', copyWa); $('waShare').addEventListener('click', shareWa);
+  $('waClose').addEventListener('click', function () { $('qWa').hidden = true; });
   $('qList').addEventListener('click', function (ev) { var t = ev.target; if (t && t.classList && t.classList.contains('sv-open') && !t.disabled) openCorrection(+t.getAttribute('data-i')); });
   $('qAuto').checked = autoAdv;
   $('qAuto').addEventListener('change', function () { autoAdv = $('qAuto').checked; store('hmgSvAutoAdvance', autoAdv ? '1' : '0'); });
