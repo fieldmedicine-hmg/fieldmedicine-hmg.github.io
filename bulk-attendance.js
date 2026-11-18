@@ -247,7 +247,7 @@
   }
   /** cell -> 'yyyy-MM-dd HH:mm' | 'yyyy-MM-dd' | 'HH:mm' | '' - for display columns of the file (Effective ..., Work Date). */
   function cellStamp(c) {
-    if (c && typeof c === 'object' && c.date) { var p = fromSerial(c.serial); return c.serial < 1 ? p.time : (p.hasTime ? p.date + ' ' + p.time : p.date); }
+    if (c && typeof c === 'object' && c.date) { var p = fromSerial(c.serial); return c.serial < 1 ? p.time : (p.hasTime || c.serial % 1 !== 0 ? p.date + ' ' + p.time : p.date); }
     return cellText(c);
   }
   /** Parses a New Check-in / Check-out cell -> {kind:'blank'} | {kind:'time', hhmm} | {kind:'datetime', date, hhmm} | {kind:'invalid', why}. */
